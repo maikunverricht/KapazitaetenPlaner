@@ -1222,6 +1222,7 @@ WBTor({
   "fuss": "",
   "eigen": [
     "ptool_rawdata",
+    "ptool_issues",
     "ptool_employees",
     "ptool_releases",
     "ptool_absences",
@@ -1955,6 +1956,7 @@ var FLOW_COL_MIN=60,FLOW_COL_MAX=600;
 // sie ist nicht ausblendbar und nicht verschiebbar. Ihre Breite wird
 // trotzdem gemerkt, deshalb ein eigenes Feld statt eines Eintrags in w.
 var FLOW_LABEL_W_DEF=240;
+var FLOW_OTHERS="Kollegen"; // v2.93.0: Sammelname fuer fremde Entwickler im Flow (gesperrt)
 // Robust gegen alte/kaputte Stände: unbekannte Keys fliegen raus, neue
 // Spalten werden hinten angehaengt, Breiten werden geklemmt.
 // ── v2.45.0: Planungsstaende (Snapshots) ────────────────────────────
@@ -2535,7 +2537,67 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="2.92.0";
+var APP_VERSION="2.93.2";
+
+// v2.93.2: Flow-Team -- die Prozentzahl gilt fuer die naechsten 4 Wochen.
+//          Geplante Last im Fenster (dieselbe Lastkarte wie Zeitstrahl und
+//          Wochenmatrix) gegen die verfuegbaren Stunden ohne Abwesenheiten und
+//          Feiertage. Bisher stand der GESAMTE eigene Restaufwand -- auch was
+//          erst in Monaten geplant ist -- gegen pauschal 4 Wochen.
+
+// v2.93.1: Flow -- Restaufwand je Mitarbeiter. Ein Issue trug bisher seinen
+//          GESAMTEN Restaufwand bei jedem beteiligten Mitarbeiter: wer eines
+//          von vier Workitems hatte, bekam alle vier angerechnet (Anna 361 %).
+//          Jetzt zaehlt im Team nur der eigene Anteil; die Aufteilung steht an
+//          jeder Team-Zeile (\"70 h von 196 h\"), auf den Karten und als
+//          Tooltip in den Spalten Rest und Entw. Fremde bleiben \"Kollegen\".
+
+// v2.93.0: Aufraeumen nach der Durchsicht, Flow ohne Rohdaten.
+//          1. Flow hatte KEINEN Sichtschutz (elftes Leck): Team, Timeline und
+//             Karten nannten gesperrt alle Entwickler. Fremde heissen jetzt
+//             \"Kollegen\". Der Leck-Scan sah es nie -- Flow war mit den
+//             Testdaten leer. Lehre: Eine Ansicht, die im Test leer bleibt,
+//             ist nicht geprueft, sondern nur aufgerufen.
+//          2. Flow liest einen Issue-Index (ptool_issues) statt der Rohdaten.
+//             Die Rohdaten verwirft saveAll ohne Hinweis ab 4 MB oder bei
+//             vollem Speicher; nach dem Neustart war Flow leer. Der Index ist
+//             klein, wird separat gesichert und ist im Backup enthalten. Die
+//             Phasenlogik der Umbuchung liest ihn ebenfalls.
+//          3. Die Analyse rechnet auf den angezeigten Terminen: \u21c4 wirkt
+//             jetzt auch auf Termin-Radar, Ampel und Umplanung.
+//          4. Entfallen: der Knopf \"Simulation\" (allein ohne Wirkung) und das
+//             nie erreichbare Fenster \"Was-waere-wenn\".
+//          5. Flow-Team: Auslastung las emp.hoursPerWeek -- das Feld heisst
+//             weeklyHours. Jeder stand auf 40 h statt seiner Wochenzeit.
+//          6. Schalter \"Workitems\" mit Haken statt des Zustandstexts
+//             \"Nur FC-Ebene\".
+
+// v2.92.2: Zahlen vereinheitlicht -- Durchsicht aller Ansichten.
+//          1. EINE Ampel (bcAmpel/ampelOfDelta) fuer BC-Planung, Dashboard,
+//             Flow, die Farbe der Spalte Delta AT und Dashboard-Kachel M6.
+//             Gelb = 0..5 AT Puffer VOR dem Ziel, Rot = nach dem Ziel. Bisher
+//             hiess Gelb "bis 5 AT zu spaet", und ein BC genau auf dem Ziel
+//             war gruen -- obwohl die Legende "Knapp (<=5 AT Puffer)" sagte.
+//             Wirkung: die Ampel wird strenger.
+//          2. Szenarien und Bericht rechnen mit der Prognose (capEnd) wie das
+//             Termin-Radar. Mit dem geplanten Ende blieb ein Ausfall im
+//             Szenario wirkungslos ("Anna faellt 6 Wochen aus" -> "kein BC
+//             verschiebt sich", das Radar zeigte nach Anwenden +18 AT).
+//             Ein Szenario wird gegen den Plan OHNE aktives Szenario
+//             verglichen (baseAbsMap); vorher steckten dessen Ausfaelle
+//             schon im "heutigen Plan".
+//          3. AT-Werte tragen "AT": Umplanungskarten ("+7 Tage"), Zeitplan
+//             der Umplanungsliste, Szenarien und Bericht ("T").
+//          4. Ein Workitem mit Verzug steht nicht mehr gruen unter OK,
+//             sondern mindestens unter PUFFER.
+//          Lehre: Wer eine Kennzahl an zwei Stellen zeigt, muss sie an einer
+//          Stelle rechnen. Drei Enddaten fuer einen BC waren drei Funktionen.
+
+// v2.92.1: Die Startmaske lief beim Anmelden zweimal ab. Sie war innerhalb
+//          von Planungstool definiert; die Startmeldung "Daten vom ...
+//          geladen" loeste zwei Neuaufbauten aus (beim Erscheinen und nach
+//          3 s beim Verschwinden). Dabei ging auch ein schon getippter Name
+//          verloren. Jetzt BootScreenOverlay auf Modulebene.
 
 // v2.92.0: Navigation nach der Werkbank-Seite.
 //          Desktop: die Seitenleiste ist ein "roter Faden" -- eine feine
@@ -3193,6 +3255,31 @@ function workdaysBefore(dateS,n){
 // Deadline-Status mit 5-Arbeitstage-Puffer
 // Gibt zurück: "ok" | "critical" | "overdue"
 var DEADLINE_BUFFER=5;
+// v2.92.2: EINE Ampel fuer BC-Planung, Dashboard und Flow. Gelb heisst
+// "Puffer bis DEADLINE_BUFFER AT VOR dem Ziel" -- dieselbe Lesart wie
+// deadlineStatus (D-05) und wie die Legende es immer behauptet hat. Bis
+// v2.92.1 hiess Gelb "bis 5 AT ZU SPAET", und ein BC genau auf dem Ziel
+// stand gruen. Puffer = Arbeitstage von der Prognose bis zum Ziel.
+function ampelOfDelta(d){
+  // d = Verzug in AT (positiv = nach dem Ziel), wie Delta AT im Radar
+  if(d===null||d===undefined||isNaN(d))return "grey";
+  if(d>0)return "red";
+  if(-d<=DEADLINE_BUFFER)return "amber";
+  return "green";
+}
+function bcAmpel(due,pred){
+  if(!due||!pred)return "grey";
+  if(isNaN(localDay(due).getTime())||isNaN(localDay(pred).getTime()))return "grey";
+  return ampelOfDelta(workdaysBetween2(due,pred));
+}
+// capEnd je Workitem aus einem Analyse-Ergebnis. Faellt auf das geplante
+// Ende zurueck, wenn ein Workitem nicht analysiert wurde (z. B. ohne Datum).
+function capEndMapOf(an){
+  var m={};
+  (an||[]).forEach(function(a){if(a&&a.pkg)m[a.pkg.id]=a.capEnd||a.pkg.end;});
+  return m;
+}
+if(typeof window!=="undefined"){window.bcAmpel=bcAmpel;window.ampelOfDelta=ampelOfDelta;window.capEndMapOf=capEndMapOf;}
 function deadlineStatus(endDate,deadlineDate){
   if(!deadlineDate||!endDate)return "ok";
   var buffer=workdaysBefore(deadlineDate,DEADLINE_BUFFER);
@@ -3721,6 +3808,26 @@ function parseImportData(workbook){
   return{employees:employees,releases:Object.values(releaseMap).map(function(r){return{...r,components:Object.values(r.components)};})};
 }
 
+// v2.93.2: Last und Kapazitaet eines Mitarbeiters in einem Fenster von n
+// Arbeitstagen ab fromStr. Last aus derselben Lastkarte wie Zeitstrahl und
+// Wochenmatrix (buildLoadMap), Kapazitaet = Arbeitstage ohne Abwesenheit
+// und Feiertag mal Tageskapazitaet.
+function windowLoad(empId,loadMap,absEmp,hpd,fromStr,n){
+  var d=localDay(fromStr),cnt=0,g=0,load=0,cap=0,lm=(loadMap&&loadMap[empId])||{};
+  absEmp=absEmp||{};
+  while(cnt<n&&g++<400){
+    if(!isWE(d)){
+      var k=dateStr(d);
+      load+=lm[k]||0;
+      if(!absEmp[k])cap+=hpd;
+      cnt++;
+    }
+    d.setDate(d.getDate()+1);
+  }
+  return {load:Math.round(load*10)/10,cap:Math.round(cap*10)/10,days:cnt};
+}
+if(typeof window!=="undefined")window.windowLoad=windowLoad;
+
 // ── Umplanungsanalyse ──────────────────────────────────────
 // Punkt 2: Nur Workitems unter evaluated/committed Issues zählen für Aufwände
 function countsForEffort(pkg){
@@ -3805,6 +3912,10 @@ function runAnalysis(releases,employees,absences,absMapIn){
     var softDays=pkgDays.filter(function(d){var u=((loadMap[pkg.employee]||{})[dateStr(d)]||0)/cap;return u>TARGET_UTIL&&u<=REPLAN_THRESHOLD;});
     var maxLoad=0;pkgDays.forEach(function(d){var l=(loadMap[pkg.employee]||{})[dateStr(d)]||0;if(l>maxLoad)maxLoad=l;});
     var capEnd=computedEnd;
+    // v2.92.2: Ein Workitem, dessen Prognose hinter dem geplanten Ende liegt,
+    // ist mindestens PUFFER -- auch wenn kein Tag ueberlastet ist (Verzug
+    // durch einen Vorgaenger oder durch einen Start in der Vergangenheit).
+    // Bis v2.92.1 stand es gruen in der Spalte OK, mit \"+2 AT\" daneben.
     // v2.84.0: EINHEITENFEHLER. totalExcess ist die Summe der ueberzaehligen
     // STUNDEN an den ueberlasteten Tagen. Sie wurde ohne Umrechnung als
     // Anzahl ARBEITSTAGE angehaengt -- ein Tag mit 2,75 h Ueberlast kostete
@@ -3827,7 +3938,7 @@ function runAnalysis(releases,employees,absences,absMapIn){
     computedCapEnd[pkgId]=capEnd;
     var endShifted=capEnd<pkg.end,endDelayed=capEnd>pkg.end;
     var indirectlyAffected=allPkgs.filter(function(other){return (other.dependencies||[]).indexOf(pkg.id)>=0&&capEnd>=other.start;}).map(function(o){return o.id;});
-    resultMap[pkgId]={pkg:pkg,emp:emp,rem:rem,planStart:effectiveStart,computedEnd:computedEnd,capEnd:capEnd,endShifted:endShifted,endDelayed:endDelayed,daysGained:endShifted?workdaysBetween2(capEnd,pkg.end):0,daysLost:endDelayed?workdaysBetween2(pkg.end,capEnd):0,hardDays:hardDays.length,softDays:softDays.length,maxUtil:Math.round((maxLoad/cap)*100),depConstrainedStart:depConstrainedStart,indirectlyAffected:indirectlyAffected,status:hardDays.length>0?"replan":softDays.length>0?"puffer":"ok"};
+    resultMap[pkgId]={pkg:pkg,emp:emp,rem:rem,planStart:effectiveStart,computedEnd:computedEnd,capEnd:capEnd,endShifted:endShifted,endDelayed:endDelayed,daysGained:endShifted?workdaysBetween2(capEnd,pkg.end):0,daysLost:endDelayed?workdaysBetween2(pkg.end,capEnd):0,hardDays:hardDays.length,softDays:softDays.length,maxUtil:Math.round((maxLoad/cap)*100),depConstrainedStart:depConstrainedStart,indirectlyAffected:indirectlyAffected,status:hardDays.length>0?"replan":(softDays.length>0||endDelayed)?"puffer":"ok"};
   });
   return allPkgs.filter(function(p){return p.lcs!=="closed";}).map(function(p){return resultMap[p.id];}).filter(Boolean);
 }
@@ -4040,6 +4151,36 @@ var CQ_MAPPING=[
   {field:"abhaengigkeit",label:"Abhängigkeiten",      src:["Abhaengigkeiten","Dependencies","Vorgaenger"]},
   {field:"_tags_xml",    label:"Tags (XML)",          src:["hasWorkitems.Tags"]},
 ];
+
+// v2.93.0: Issue-Ebene als eigener, kleiner Bestand (ptool_issues). Flow und
+// die Phasenlogik der Umbuchung brauchten bisher die kompletten Rohdaten.
+// Die verwirft saveAll aber ohne Hinweis, sobald sie ueber 4 MB liegen oder
+// der Speicher voll ist -- nach dem Neuladen war Flow dann leer. Der Index
+// haelt je Issue nur, was diese Stellen lesen: Titel, Status, BC, Ziel- und
+// Committed-Termin, FCs und die zugehoerigen Workitem-IDs.
+function buildIssueIndex(rows){
+  var m={};
+  (rows||[]).forEach(function(row){
+    if(!row)return;
+    var id=String(row.iss_id||"").trim();
+    if(!id)return;
+    var x=m[id];
+    if(!x)x=m[id]={t:row.iss_titel||id,l:String(row.iss_status||"").toLowerCase(),
+      bc:row.bc_name||"",bcId:row.bc_id||"",bcPlan:row.bc_deadline||"",com:row.bc_committed||"",fcs:[],wis:[]};
+    if(row.fc_name){
+      var k=row.fc_id||row.fc_name;
+      if(!x.fcs.some(function(f){return (f.id||f.name)===k;}))x.fcs.push({name:row.fc_name,id:row.fc_id||""});
+    }
+    var w=String(row.wi_id||"").trim();
+    if(w&&x.wis.indexOf(w)<0)x.wis.push(w);
+  });
+  return m;
+}
+function isIssueIndex(v){
+  if(!v||typeof v!=="object"||Array.isArray(v))return false;
+  return Object.keys(v).every(function(k){var x=v[k];return x&&typeof x==="object"&&Array.isArray(x.wis);});
+}
+if(typeof window!=="undefined"){window.buildIssueIndex=buildIssueIndex;window.isIssueIndex=isIssueIndex;}
 
 function normalizeToClearQuestTable(rawRows){
   function _get(row,srcList){for(var i=0;i<srcList.length;i++){var v=row[srcList[i]];if(v!==undefined&&v!==null&&String(v).trim()!="")return String(v).trim();}return "";}
@@ -5063,6 +5204,63 @@ function ExtViewOverlay(p){
   );
 }
 
+// v2.92.1: Startmaske auf Modulebene. Innerhalb von Planungstool bekam sie
+// bei jedem Rendern eine neue Identitaet -- React baute sie neu auf, die
+// Animation lief erneut und ein angefangener Name war weg. Ausloeser beim
+// Start: die Meldung "Daten vom ... geladen" (an und nach 3 s wieder aus).
+// Dieselbe Regel wie v2.58.0: Komponenten mit Eingaben nie in einer
+// anderen Komponente definieren.
+function BootScreenOverlay(p){
+  var s_v=useState(""); var val=s_v[0],setVal=s_v[1];
+  var s_out=useState(false); var out=s_out[0],setOut=s_out[1];
+  var inputRef=useRef(null);
+  useEffect(function(){
+    // Fokus erst setzen, wenn das Feld ausgefahren ist -- sonst scrollt iOS
+    // die halbfertige Animation weg.
+    var t=setTimeout(function(){
+      try{if(inputRef.current)inputRef.current.focus();}catch(e){}
+    },1550);
+    return function(){clearTimeout(t);};
+  },[]);
+  function submit(name){
+    var n=String(name==null?val:name).trim();
+    if(!n)return;
+    setOut(true); // Ausblenden zuerst, damit der Wechsel nicht hart schneidet
+    setTimeout(function(){p.onConfirm(n);},380);
+  }
+  return React.createElement("div",{id:"bootscreen",className:out?"out":""},
+    React.createElement("div",{className:"bw"},
+      BOOT_WORD.split("").map(function(ch,i){
+        return React.createElement("span",{key:i,className:"bl",style:{
+          "--gw":BOOT_BARW[i]+"px","--lw":bootLetterW(ch)+"px",
+          animationDelay:(i*0.045).toFixed(3)+"s"
+        }},
+          React.createElement("i",{style:{background:BOOT_COLS[i],animationDelay:(0.2+i*0.045).toFixed(3)+"s"}}),
+          React.createElement("b",{style:{animationDelay:(0.3+i*0.045).toFixed(3)+"s"}},ch)
+        );
+      })
+    ),
+    React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:"var(--c-text-light)",letterSpacing:1.4,
+      marginTop:10,fontWeight:700}},"CAPACITY PLANNING"),
+    React.createElement("div",{className:"bq"},"Wer plant heute?"),
+    React.createElement("div",{className:"bmorph done"},
+      React.createElement("input",{ref:inputRef,type:"text",value:val,placeholder:"Name",
+        autoComplete:"off",autoCorrect:"off",spellCheck:false,
+        onChange:function(e){setVal(e.target.value);},
+        onKeyDown:function(e){if(e.key==="Enter"){e.preventDefault();submit();}}}),
+      React.createElement("button",{onClick:function(){submit();}},"Los")
+    ),
+    (p.recentNames||[]).length>0&&React.createElement("div",{className:"bchips"},
+      (p.recentNames||[]).map(function(n){
+        return React.createElement("button",{key:n,onClick:function(){submit(n);}},n);
+      })
+    ),
+    React.createElement("button",{className:"bskip",onClick:function(){
+      setOut(true);setTimeout(function(){p.onSkip();},380);
+    }},"Ohne Namen fortfahren")
+  );
+}
+
 // ══════════════════════════════════════════════════════════
 function Planungstool(){
   var s_sideOpen=useState(function(){try{return window.innerWidth>=768;}catch(_){return true;}}); var sideOpen=s_sideOpen[0],setSideOpen=s_sideOpen[1]; // v2.39.0: mobil default eingeklappt
@@ -5071,6 +5269,18 @@ function Planungstool(){
   function lsLoad(key,def){try{var v=localStorage.getItem(key);return v!=null?JSON.parse(v):def;}catch(e){return def;}}
 
   var s_rawData=useState(function(){return lsLoad("ptool_rawdata",[]);});var rawData=s_rawData[0],setRawData=s_rawData[1];
+  // v2.93.0: Issue-Index. Wird aus den Rohdaten abgeleitet, sobald welche im
+  // Speicher sind, und separat gesichert -- er ueberlebt damit auch einen
+  // Neustart, nach dem die Rohdaten nicht mehr gespeichert werden konnten.
+  var s_issueIdx=useState(function(){var v=lsLoad("ptool_issues",null);return isIssueIndex(v)?v:null;});
+  var issueIdx=s_issueIdx[0],setIssueIdx=s_issueIdx[1];
+  useEffect(function(){
+    if(rawData&&rawData.length){
+      var idx=buildIssueIndex(rawData);
+      setIssueIdx(idx);
+      try{localStorage.setItem("ptool_issues",JSON.stringify(idx));}catch(e){}
+    }
+  },[rawData]);
 
   // ── Individuelle Farben ───────────────────────────────────────────────
   var s_cc=useState(function(){
@@ -5726,7 +5936,7 @@ function Planungstool(){
   stateRef.current={view:view,zoom:zoom,hiddenRel:hiddenRel,hiddenEmp:hiddenEmp,
     rangeStart:rangeStart,rangeEnd:rangeEnd,releases:releases,employees:employees,
     rawData:rawData,absences:absences,customColors:customColors,manualBlockers:manualBlockers,prioOrder:prioOrder,laneOverrides:laneOverrides,wipLimits:wipLimits,
-    cqUrl:cqUrl,timeEntries:timeEntries,accounts:accounts,holCfg:holCfg,scenarios:scenarios};
+    cqUrl:cqUrl,timeEntries:timeEntries,accounts:accounts,holCfg:holCfg,scenarios:scenarios,issueIdx:issueIdx};
 
   // ── v2.39.0: Persistenz mit Nutzer-Feedback bei Fehlschlag (Quota etc.) ──
   // setTimeout(…,0) verhindert setState während der Render-Phase, falls der
@@ -5913,7 +6123,7 @@ function Planungstool(){
     return function(){window.removeEventListener("keydown",onKey);window.removeEventListener("mousedown",onDown);};
   },[]);
 
-  // Korrekte Reihenfolge: absenceMap → analysis → simReleases → activeReleases → allPkgs → …
+  // Korrekte Reihenfolge: absenceMap → simReleases → activeReleases → analysis → allPkgs → … (v2.93.0)
   // v2.71.0: Feiertage als Karte "YYYY-MM-DD" -> Name. Die Spanne umfasst das
   // Vorjahr bis fuenf Jahre voraus -- weit genug fuer jede Planung, ohne bei
   // jedem Render hunderte Jahre zu rechnen.
@@ -5931,15 +6141,22 @@ function Planungstool(){
   // Geschlossene Workitems bleiben aussen vor: erledigte Arbeit kann nichts
   // mehr reissen.
   // ══════════════════════════════════════════════════════════════════
-  function bcDelays(rels){
+  // v2.92.2: capOf = capEnd je Workitem. Gerechnet wird mit der PROGNOSE,
+  // wie im Termin-Radar -- nicht mit dem geplanten Ende aus ClearQuest. Mit
+  // dem Planwert blieb ein Ausfall im Szenario wirkungslos (er aendert das
+  // geplante Ende nie), und Bericht, Szenarien und Radar nannten fuer
+  // denselben BC drei verschiedene Enddaten.
+  function bcDelays(rels,capOf){
     var out=[];
+    capOf=capOf||{};
     (rels||[]).forEach(function(r){
       if(!r.dueDate)return;
       var last="",open=0;
       function scan(p){
         if(!p||p.lcs==="closed")return;
         open++;
-        if(p.end&&p.end>last)last=p.end;
+        var e=capOf[p.id]||p.end;
+        if(e&&e>last)last=e;
       }
       (r.directPackages||[]).forEach(scan);
       (r.components||[]).forEach(function(c){(c.packages||[]).forEach(scan);});
@@ -5991,7 +6208,10 @@ function Planungstool(){
   // 44 Stellen einzeln geprueft zu werden. Der Typ "feiertag" haelt sie von
   // echten Abwesenheiten unterscheidbar; eine bestehende Abwesenheit am selben
   // Tag hat Vorrang, damit gemeldeter Urlaub nicht ueberschrieben wird.
-  var absenceMap=useMemo(function(){
+  // v2.92.2: Basiskarte OHNE Szenario. Der Szenarienvergleich und
+  // absMapForScenario rechnen von hier aus -- vorher nahmen sie die Karte
+  // MIT aktivem Szenario, und \"Heutiger Plan\" enthielt dessen Ausfaelle.
+  var baseAbsMap=useMemo(function(){
     var m={};
     (employees||[]).forEach(function(e){
       var em=m[e.id]={};
@@ -6004,10 +6224,16 @@ function Planungstool(){
         m[ab.employee][k]=ab.type;
       });
     });
+    return m;
+  },[absences,employees,holidayMap]);
+  var absenceMap=useMemo(function(){
+    if(!(activeScen&&Array.isArray(activeScen.absences)))return baseAbsMap;
+    var m={};
+    Object.keys(baseAbsMap).forEach(function(id){m[id]=Object.assign({},baseAbsMap[id]);});
     // v2.72.0: Angenommene Ausfaelle des aktiven Szenarios. Sie kommen zuletzt
     // und ueberschreiben damit auch gemeldete Abwesenheiten -- ein Szenario
     // beschreibt eine andere Welt, keine Ergaenzung zur bestehenden.
-    if(activeScen&&Array.isArray(activeScen.absences)){
+    {
       var byName={};(employees||[]).forEach(function(e){byName[e.name]=e.id;});
       activeScen.absences.forEach(function(ab){
         var id=byName[ab.employeeName];
@@ -6019,10 +6245,10 @@ function Planungstool(){
       });
     }
     return m;
-  },[absences,employees,holidayMap,activeScen]);
+  },[baseAbsMap,employees,activeScen]);
   // v2.88.3: Analyse mit der vollstaendigen Abwesenheitskarte (inkl. Feiertage
   // und aktivem Szenario).
-  var analysis=useMemo(function(){return runAnalysis(releases,employees,absences,absenceMap);},[releases,employees,absences,absenceMap]);
+  // v2.93.0: analysis steht jetzt hinter activeReleases (siehe dort).
 
   // ── Simulierte Releases: Kapazitätsbewusster Scheduler ────
   // Jeder Mitarbeiter wird mit einem Buchungskalender (Set) verwaltet.
@@ -6046,7 +6272,8 @@ function Planungstool(){
     employees.forEach(function(e){empBooked[e.id]=new Set();});
     // P1: wid→issueId Map einmalig (statt rawData.find pro WI)
     var widToIssue={};
-    if(rawData&&rawData.length){rawData.forEach(function(rd){if(rd.wi_id)widToIssue[rd.wi_id]=rd.iss_id||null;});}
+    // v2.93.0: aus dem Issue-Index statt aus den Rohdaten
+    if(issueIdx){Object.keys(issueIdx).forEach(function(iid){(issueIdx[iid].wis||[]).forEach(function(w){widToIssue[w]=iid;});});}
 
     // Plane rem Stunden ab fromDate für empId (überspringt WE + Abwesenheit + bereits gebucht)
     function scheduleAndBook(empId,fromDate,rem){
@@ -6143,7 +6370,7 @@ function Planungstool(){
   // Abwesenheitskarte unter den Annahmen EINES Szenarios -- ohne es zu aktivieren.
   function absMapForScenario(sc){
     var m={};
-    Object.keys(absenceMap).forEach(function(id){m[id]=Object.assign({},absenceMap[id]);});
+    Object.keys(baseAbsMap).forEach(function(id){m[id]=Object.assign({},baseAbsMap[id]);}); // v2.92.2
     var byName={};(employees||[]).forEach(function(e){byName[e.name]=e.id;});
     ((sc&&sc.absences)||[]).forEach(function(ab){
       var id=byName[ab.employeeName];
@@ -6176,7 +6403,7 @@ function Planungstool(){
         })};})
       };
     });
-  },[releases,umbMode,absenceMap,employees,rawData,activeScen]);
+  },[releases,umbMode,absenceMap,employees,issueIdx,activeScen]);
 
   // activeReleases: im Sim-Modus simReleases, sonst releases
   var anyUmbuch=Object.values(umbMode).some(Boolean);
@@ -6187,6 +6414,18 @@ function Planungstool(){
   // Vorher zeigte nur simMode den Banner -- ein aktiver Umbuchen-Toggle verschob
   // die Balken still und leise (inkl. Urlaubsberuecksichtigung).
   var simActive=simMode||anyUmbuch;
+  // v2.93.0: Die Analyse rechnet auf den ANGEZEIGTEN Terminen. Bis v2.92.2
+  // rechnete sie auf releases: ein \u21c4 (Umbuchen) verschob die Balken,
+  // Termin-Radar, Ampel und Umplanung blieben aber beim alten Plan -- Balken
+  // und Prognose widersprachen sich. Deshalb steht sie HIER, hinter
+  // activeReleases; weiter oben waere activeReleases per Hoisting undefined.
+  var analysis=useMemo(function(){return runAnalysis(activeReleases,employees,absences,absenceMap);},[activeReleases,employees,absences,absenceMap]);
+  // v2.92.2: Prognose des heutigen Plans ohne Szenario und ohne Umbuchung --
+  // Bezugsgroesse der Szenarien-Ansicht.
+  var planCapEnd=useMemo(function(){
+    if(absenceMap===baseAbsMap&&activeReleases===releases)return capEndMapOf(analysis);
+    return capEndMapOf(runAnalysis(releases,employees,absences,baseAbsMap));
+  },[analysis,absenceMap,baseAbsMap,activeReleases,releases,employees,absences]);
 
   var allPkgs=useMemo(function(){
     return activeReleases.flatMap(function(r){
@@ -6673,7 +6912,7 @@ function Planungstool(){
         {id:"S-05",p:"S",t:"Nicht-Funk",r:"Kein Build-Schritt: der Code aller Module bleibt in der Datei. Das kostet Dateigroesse und schuetzt nicht vor Neugier, haelt aber die Ein-Datei-Auslieferung bei.",v:"MODULES_ON zur Laufzeit",tc:"[Entfaellt]"},
         {id:"F-24",p:"M",t:"Funk",r:"Der Umschalter der Auslastung trennt Dimension und Darstellung: links Mitarbeiter mit den Unterpunkten Gantt und Matrix, daneben BC.",v:"gruppierte Schaltflaechen",tc:"P-A-1..3 [Auto]"},
         {id:"F-25",p:"M",t:"Nicht-Funk",r:"In der Auslastung nach BC steht der Name allein in der ersten Zeile der Titelspalte, Termin und Abzeichen in einer zweiten. Ein Titel darf nicht mit festbreiten Nachbarn um dieselbe Zeile ringen -- der feste Anteil war breiter als die Spalte.",v:"flexDirection column in BC- und FC-Zeile",tc:"BL-A-1..4 [Auto]"},
-        {id:"BC-A-1",p:"M",t:"Funk",r:"Verzug wird ueberall in ARBEITSTAGEN gemessen: die Ampel der BC-Planung, die Spalte Delta AT und die Dashboard-Kachel Groesste Verzuege nutzen denselben Helfer und dieselbe Schwelle (DEADLINE_BUFFER). Ein gelbes Licht heisst damit tatsaechlich hoechstens fuenf Arbeitstage Verzug, nicht fuenf Kalendertage.",v:"workdaysBetween2 statt Kalendertagsdifferenz, deltaAT ohne pauschalen Abzug",tc:"AM-1..16 [Auto]"},
+        {id:"BC-A-1",p:"M",t:"Funk",r:"Verzug wird ueberall in ARBEITSTAGEN gemessen: die Ampel der BC-Planung, die Spalte Delta AT und die Dashboard-Kachel Groesste Verzuege nutzen denselben Helfer und dieselbe Schwelle (DEADLINE_BUFFER). Seit v2.92.2 gibt es dafuer EINEN Helfer (bcAmpel): Gruen = mehr als fuenf Arbeitstage Puffer vor dem Ziel, Gelb = null bis fuenf AT Puffer, Rot = Prognose nach dem Ziel.",v:"workdaysBetween2 statt Kalendertagsdifferenz, deltaAT ohne pauschalen Abzug",tc:"AM-1..16 [Auto]"},
         {id:"BC-A-2",p:"M",t:"Funk",r:"Auch Szenarien, Umplanung, Konflikt-Kaskaden, Was-waere-wenn und der Export messen Verzug in Arbeitstagen und beschriften ihn mit AT. Countdowns (\"in 5T\", \"10 Tage ueberfaellig\") bleiben bewusst Kalendertage und tragen \"T\" bzw. \"Tage\".",v:"workdaysBetween2 in bcDelays, daysLost, shiftDays, delta",tc:"V3-AT-1..3, V4-UE-1 [Auto]"},
         {id:"ACC-15",p:"M",t:"Funk",r:"Auch rechnende Ansichten unterliegen dem Sichtschutz: die Kapazitaetstabelle der BC-Planung, ihre Engpass-Spalte und der Bearbeiter des kritischen Workitems nennen ohne erweiterte Ansicht keine fremden Namen. Fremde Zeilen werden zu einer Sammelzeile verrechnet, damit Bedarf und Luecke richtig bleiben.",v:"computeCapacity maskiert, wenn canSeeAll false",tc:"LK-BCP-1..3 [Auto]"},
         {id:"R-04",p:"S",t:"Funk",r:"Jede BC-Zeile der Auslastung nach Mitarbeiter traegt einen Sprungpfeil in die Auslastung nach BC: Modus wechseln, BC aufklappen, Zeile anscrollen und kurz umranden. Der Zeilenklick bleibt Auf- und Zuklappen.",v:"jumpToBc + data-bc-row in ReleaseView",tc:"JB-A-1..4 [Auto]"},
@@ -7056,7 +7295,7 @@ function Planungstool(){
       {id:"V3-AN-1",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Feiertag in der Abwesenheitskarte verlaengert die Analyse",c:"runAnalysis mit Feiertag am Mi, 35 h Rest ab Mo",e:"Ende Mo der Folgewoche statt Fr"},
       {id:"V3-AN-2",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Analyse erhaelt absenceMap",c:"Quelltextpruefung useMemo",e:"runAnalysis(releases,employees,absences,absenceMap), absenceMap in den Abhaengigkeiten"},
       {id:"V3-AN-3",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Ohne Karte bleibt das alte Verhalten",c:"runAnalysis nur mit absences",e:"Abwesenheit wirkt wie bisher"},
-      {id:"V3-AN-4",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Was-waere-wenn rechnet auf derselben Karte wie die Basis",c:"Quelltextpruefung runWhatIfSim",e:"simMap aus absenceMap plus Simulation"},
+      {id:"V3-AN-4",g:"B – Bugfixes",ty:"Auto",s:"Entfallen",r:"Was-waere-wenn rechnet auf derselben Karte wie die Basis (v2.93.0: Fenster entfernt)",c:"Quelltextpruefung runWhatIfSim",e:"simMap aus absenceMap plus Simulation"},
       {id:"V3-LM-1",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Ausgeblendeter BC senkt die Last nicht",c:"Wochenmatrix mit und ohne ausgeblendeten BC",e:"gleiche Stunden in KW 47"},
       {id:"V3-LM-2",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"WI unter nicht freigegebenem Issue belastet nicht",c:"Klaus, KW 42, ein WI unter submitted",e:"40 h statt 80 h"},
       {id:"V3-LM-3",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Gleicher Tagessatz in Analyse und Anzeige",c:"buildLoadMap mit und ohne chargePast",e:"4 h am selben Tag, Vergangenheit nur mit chargePast"},
@@ -7073,9 +7312,9 @@ function Planungstool(){
       {id:"LK-SU-1",g:"S – Sichtschutz",ty:"Auto",s:"Bestanden",r:"Globale Suche liefert gesperrt nur eigene Workitems",c:"Suche nach SWE, fremder WI-ID und Namensteil",e:"Testname taucht nirgends auf, eigenes WI wird gefunden"},
       {id:"LK-SU-2",g:"S – Sichtschutz",ty:"Auto",s:"Bestanden",r:"Gegenprobe Suche",c:"Freischalten, fremde WI-ID suchen",e:"'MA: <Testname>' erscheint"},
       // v2.88.2 – Verzug in Arbeitstagen
-      {id:"AM-3",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Ein Arbeitstag Verzug ergibt Gelb",c:"Ziel Mi, Prognose Do",e:"amber"},
-      {id:"AM-5",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Sechs Arbeitstage Verzug ergeben Rot",c:"Ziel Mi, Prognose Do der Folgewoche",e:"red"},
-      {id:"AM-6",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Ein Wochenende verbraucht das gelbe Budget nicht",c:"Ziel Fr, Prognose Mo",e:"amber statt vormals drei verbrauchter Tage"},
+      {id:"AM-3",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Prognose genau auf dem Ziel ergibt Gelb (kein Puffer)",c:"Ziel Mi, Prognose Mi",e:"amber (v2.92.2; vorher gruen)"},
+      {id:"AM-5",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Ein Arbeitstag Verzug ergibt Rot",c:"Ziel Mi, Prognose Do",e:"red (v2.92.2; vorher gelb)"},
+      {id:"AM-6",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Ein Wochenende zaehlt nicht als Puffer",c:"Prognose Fr, Ziel Fr der Folgewoche",e:"5 AT Puffer = amber, 6 AT = green"},
       {id:"AM-10",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Die Ampel wird strenger, nicht milder",c:"Ziel Do, Prognose Fr der Folgewoche",e:"red"},
       {id:"AM-11",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Ampel und Spalte Delta AT stammen aus derselben Funktion",c:"Quelltextpruefung deltaAT",e:"Aufruf von workdaysBetween2, kein Abzug von 1"},
       {id:"AM-11d",g:"B – Bugfixes",ty:"Auto",s:"Bestanden",r:"Zieltermin am Wochenende wird korrekt gezaehlt",c:"dueDate auf Sa oder So, alte gegen neue Formel",e:"neue Formel zaehlt einen Arbeitstag mehr"},
@@ -7743,7 +7982,7 @@ function Planungstool(){
   // v2.72.0 — Szenarien-Ansicht (Freiraum Vision)
   // ══════════════════════════════════════════════════════════════════
   function SzenarienView(){
-    var baseline=useMemo(function(){return bcDelays(releases);},[releases]);
+    var baseline=useMemo(function(){return bcDelays(releases,planCapEnd);},[releases,planCapEnd]);
     var baseById={};baseline.forEach(function(b){baseById[b.id]=b;});
 
     // Fuer jedes Szenario wird der Verzug einmal durchgerechnet. Der Aufwand
@@ -7762,13 +8001,14 @@ function Planungstool(){
                 var x=sched[p.id];return (!x||p.lcs==="closed")?p:Object.assign({},p,{start:x.start,end:x.end});})});})
           });
         });
-        var del=bcDelays(rels);
+        // v2.92.2: Prognose unter den Annahmen dieses Szenarios
+        var del=bcDelays(rels,capEndMapOf(runAnalysis(rels,employees,absences,absMapForScenario(sc))));
         var late=del.filter(function(x){return x.late;});
         var worst=late.length?late[0].days:0;
         var sum=late.reduce(function(a,x){return a+x.days;},0);
         return {scen:sc,delays:del,late:late.length,worst:worst,sumDays:sum};
       });
-    },[scenarios,releases,absenceMap]);
+    },[scenarios,releases,baseAbsMap,employees,absences]);
 
     var card={background:A.surface,border:"1px solid "+A.border,borderRadius:"var(--r-xl)",padding:16};
     var lbl={fontSize:"var(--fs-xs)",fontWeight:700,color:A.textLight,textTransform:"uppercase",letterSpacing:0.6};
@@ -7778,7 +8018,7 @@ function Planungstool(){
       var col=days>0?A.coral:days<0?A.green:A.textLight;
       return React.createElement("span",{key:key,style:{fontSize:"var(--fs-sm)",fontWeight:800,color:col,
         fontFamily:"var(--font-mono)",whiteSpace:"nowrap"}},
-        days>0?("+"+days+" T"):days<0?(days+" T"):"pünktlich");
+        days>0?("+"+days+" AT"):days<0?(days+" AT"):"pünktlich");
     }
 
     return React.createElement("div",{style:{padding:20,display:"flex",flexDirection:"column",gap:16,maxWidth:1180}},
@@ -7818,7 +8058,7 @@ function Planungstool(){
                   React.createElement("span",{style:{fontSize:"var(--fs-sm)",color:A.text,flex:1,minWidth:0,
                     whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},b.name),
                   React.createElement("span",{style:{fontSize:"var(--fs-xs)",color:A.textLight,flexShrink:0}},
-                    "Ziel "+b.due+" \u00b7 zuletzt "+b.last),
+                    "Ziel "+b.due+" \u00b7 Prognose "+b.last),
                   delayChip(b.days,"d")
                 );
               })
@@ -8022,7 +8262,7 @@ function Planungstool(){
       return out;
     },[timeEntries,rp]);
 
-    var delays=useMemo(function(){return bcDelays(activeReleases);},[activeReleases]);
+    var delays=useMemo(function(){return bcDelays(activeReleases,capEndMapOf(analysis));},[activeReleases,analysis]);
     var late=delays.filter(function(d){return d.late;});
 
     var sheet={background:A.surface,border:"1px solid "+A.border,borderRadius:"var(--r-xl)",padding:18};
@@ -8194,7 +8434,7 @@ function Planungstool(){
               "Kein BC hat einen Zieltermin hinterlegt.")
           : React.createElement("table",{style:{width:"100%",borderCollapse:"collapse"}},
               React.createElement("thead",null,React.createElement("tr",null,
-                ["BC","Zieltermin","Letztes Ende","Offene WI","Verzug"].map(function(h,i){
+                ["BC","Zieltermin","Prognose","Offene WI","Verzug"].map(function(h,i){
                   return React.createElement("th",{key:i,
                     style:Object.assign({},th,{textAlign:i>=3?"right":"left"})},h);})
               )),
@@ -8207,7 +8447,7 @@ function Planungstool(){
                     React.createElement("td",{style:num},String(d.open)),
                     React.createElement("td",{style:Object.assign({},num,{fontWeight:800,
                       color:d.days>0?A.coral:A.green})},
-                      d.days>0?("+"+d.days+" T"):"im Termin")
+                      d.days>0?("+"+d.days+" AT"):"im Termin")
                   );
                 })
               )
@@ -8216,7 +8456,7 @@ function Planungstool(){
 
       React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,lineHeight:1.6}},
         "Soll = Arbeitstage \u00d7 Tageskapazit\u00e4t je Mitarbeiter, abz\u00fcglich Feiertagen und Abwesenheiten. ",
-        "Ist = erfasste Zeit aus der Zeiterfassung. Verzug = sp\u00e4testes Ende eines offenen Workitems gegen den BC-Termin.")
+        "Ist = erfasste Zeit aus der Zeiterfassung. Prognose = sp\u00e4testes berechnetes Ende eines offenen Workitems (wie im Termin-Radar). Verzug in Arbeitstagen gegen den BC-Termin.")
     );
   }
 
@@ -9899,7 +10139,7 @@ function Planungstool(){
                       var id=pkg.cqId||pkg.id||"";
                       var title=pkg.title||pkg.cn||"";
                       var shiftVal=item.daysLost||item.shiftDays||0;
-                      var shift=shiftVal>0?"+"+shiftVal+" Tage":"";
+                      var shift=shiftVal>0?"+"+shiftVal+" AT":""; // v2.92.2: AT-Wert
                       return React.createElement("div",{key:i,style:{fontSize:"var(--fs-xs)",borderRadius:"var(--r-sm)",background:"rgb(var(--c-surface-rgb) / 0.6)",padding:"3px 6px"}},
                         id&&React.createElement(CopyID,{id:id,label:id,style:{fontSize:"var(--fs-2xs)"}}),
                         React.createElement("div",{style:{color:A.text,marginTop:1,fontSize:"var(--fs-xs)"}},
@@ -10957,7 +11197,7 @@ function Planungstool(){
           // v2.88.2: Arbeitstage statt Kalendertage. dLabel beschriftet diesen
           // Wert seit jeher mit "AT" -- gerechnet wurden aber Kalendertage.
           var diff=workdaysBetween2(r.dueDate,pred);
-          ampel=diff<=0?"green":diff<=DEADLINE_BUFFER?"amber":"red";
+          ampel=bcAmpel(r.dueDate,pred); // v2.92.2
           delta=diff;
         }
         var empSet={};allWi.forEach(function(p){if(p.employee)empSet[p.employee]=true;});
@@ -11041,7 +11281,7 @@ function Planungstool(){
     }
     var AMP={red:"\u{1F534}",amber:"\u{1F7E1}",green:"\u{1F7E2}",grey:"\u26AA"};
     function dLabel(d){return d===null?"\u2013":(d>0?"+"+d+" AT":d<0?d+" AT":"0 AT");}
-    function dColor(d){return d===null?A.textLight:d>5?A.coral:d>0?A.amber:A.green;}
+    function dColor(d){var k=ampelOfDelta(d);return k==="red"?A.coral:k==="amber"?A.amber:k==="green"?A.green:A.textLight;} // v2.92.2
     function short(dstr){
       if(!dstr)return "\u2013";
       var p=String(dstr).split("-");return p.length===3?(p[2]+"."+p[1]+"."):dstr;
@@ -11566,57 +11806,6 @@ function Planungstool(){
     );
   }
 
-  function BootScreen(){
-    var s_v=useState(""); var val=s_v[0],setVal=s_v[1];
-    var s_out=useState(false); var out=s_out[0],setOut=s_out[1];
-    var inputRef=useRef(null);
-    useEffect(function(){
-      // Fokus erst setzen, wenn das Feld ausgefahren ist -- sonst scrollt iOS
-      // die halbfertige Animation weg.
-      var t=setTimeout(function(){
-        try{if(inputRef.current)inputRef.current.focus();}catch(e){}
-      },1550);
-      return function(){clearTimeout(t);};
-    },[]);
-    function submit(name){
-      var n=String(name==null?val:name).trim();
-      if(!n)return;
-      setOut(true); // Ausblenden zuerst, damit der Wechsel nicht hart schneidet
-      setTimeout(function(){confirmDashUser(n);},380);
-    }
-    return React.createElement("div",{id:"bootscreen",className:out?"out":""},
-      React.createElement("div",{className:"bw"},
-        BOOT_WORD.split("").map(function(ch,i){
-          return React.createElement("span",{key:i,className:"bl",style:{
-            "--gw":BOOT_BARW[i]+"px","--lw":bootLetterW(ch)+"px",
-            animationDelay:(i*0.045).toFixed(3)+"s"
-          }},
-            React.createElement("i",{style:{background:BOOT_COLS[i],animationDelay:(0.2+i*0.045).toFixed(3)+"s"}}),
-            React.createElement("b",{style:{animationDelay:(0.3+i*0.045).toFixed(3)+"s"}},ch)
-          );
-        })
-      ),
-      React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:"var(--c-text-light)",letterSpacing:1.4,
-        marginTop:10,fontWeight:700}},"CAPACITY PLANNING"),
-      React.createElement("div",{className:"bq"},"Wer plant heute?"),
-      React.createElement("div",{className:"bmorph done"},
-        React.createElement("input",{ref:inputRef,type:"text",value:val,placeholder:"Name",
-          autoComplete:"off",autoCorrect:"off",spellCheck:false,
-          onChange:function(e){setVal(e.target.value);},
-          onKeyDown:function(e){if(e.key==="Enter"){e.preventDefault();submit();}}}),
-        React.createElement("button",{onClick:function(){submit();}},"Los")
-      ),
-      recentNames.length>0&&React.createElement("div",{className:"bchips"},
-        recentNames.map(function(n){
-          return React.createElement("button",{key:n,onClick:function(){submit(n);}},n);
-        })
-      ),
-      React.createElement("button",{className:"bskip",onClick:function(){
-        setOut(true);setTimeout(function(){setDashUser("");},380);
-      }},"Ohne Namen fortfahren")
-    );
-  }
-
   function BCPlanungView(){
     var s_zoom=useState("week"); var zoom=s_zoom[0],setZoom=s_zoom[1];
     var s_filter=useState("all"); var filter=s_filter[0],setFilter=s_filter[1];
@@ -11679,10 +11868,7 @@ function Planungstool(){
         // workdaysBetween2 zaehlt exklusive Startdatum -- genau wie deltaAT.
         var ampel="grey";
         if(predDelivery&&r.dueDate){
-          var diff=workdaysBetween2(r.dueDate,predDelivery);
-          if(diff<=0)ampel="green";
-          else if(diff<=DEADLINE_BUFFER)ampel="amber";
-          else ampel="red";
+          ampel=bcAmpel(r.dueDate,predDelivery); // v2.92.2
         }
 
         // FCs aggregieren
@@ -12010,11 +12196,9 @@ function Planungstool(){
       if(d<0)return d+" AT";
       return "0 AT";
     }
-    function deltaColor(d){
-      if(d===null)return A.textLight;
-      if(d>5)return A.coral;
-      if(d>0)return A.amber;
-      return A.green;
+    function deltaColor(d){ // v2.92.2: dieselbe Schwelle wie die Ampel
+      var k=ampelOfDelta(d);
+      return k==="red"?A.coral:k==="amber"?A.amber:k==="green"?A.green:A.textLight;
     }
     function openWi(bc,pkg){
       setEditPkg(Object.assign({},pkg,{
@@ -12482,6 +12666,15 @@ function Planungstool(){
   // FlowView – Issue-Board mit horizontalen Swimlanes
   // ════════════════════════════════════════════════════════════════════
   function FlowView(){
+    // v2.93.0: Sichtschutz -- das elfte Leck derselben Bauart. Flow nannte
+    // gesperrt in Team, Timeline und Karten die Namen aller Entwickler. Der
+    // Leck-Scan fand es nicht, weil Flow mit den Testdaten (ohne Rohdaten)
+    // immer leer war. Fremde erscheinen als \"Kollegen\", wie M5 \"Kollege\".
+    function flowName(emp){
+      if(!emp)return "";
+      if(canSeeAll||(selfEmp&&emp.id===selfEmp.id))return emp.name||"";
+      return FLOW_OTHERS;
+    }
     // Mischt eine Hex-Farbe mit weiß zu einer SOLIDEN hellen Variante (für sticky-Spalten)
     function solidTint(hex,a){return tint(hex,a);} // v2.89.0: versteht auch var(...)
 
@@ -12530,6 +12723,13 @@ function Planungstool(){
       return "KW "+wk;
     }
     function fd(ds){if(!ds)return "–";return kwMode?kw(ds):ds;}
+    // v2.93.1: Anteil eines Mitarbeiters am Restaufwand und die Aufteilung als Text
+    function restOf(iss,name){return Math.round(((iss.restByDev||{})[name]||0)*10)/10;}
+    function restSplit(iss,sep){
+      var m=iss.restByDev||{};
+      return Object.keys(m).sort(function(a,b){return m[b]-m[a];})
+        .map(function(k){return k+" "+Math.round(m[k]*10)/10+" h";}).join(sep||" \u00b7 ");
+    }
 
     // ── capEnd-Map aus analysis ──────────────────────────────────────
     var capEndMap=useMemo(function(){
@@ -12538,37 +12738,15 @@ function Planungstool(){
       return m;
     },[analysis]);
 
-    // ── Issue-Aggregation aus rawData ────────────────────────────────
+    // ── Issue-Aggregation aus dem Issue-Index (v2.93.0) ──────────────
     var issues=useMemo(function(){
-      if(!rawData||!rawData.length)return [];
+      if(!issueIdx)return [];
       var issMap={};
-      // 1. Issue-Stammdaten aus rawData aufbauen
-      rawData.forEach(function(row){
-        var issId=(row.iss_id||"").trim();
-        if(!issId)return;
-        if(!issMap[issId]){
-          issMap[issId]={
-            id:issId,
-            title:row.iss_titel||issId,
-            lcs:(row.iss_status||"").toLowerCase(),
-            bcName:row.bc_name||"",
-            bcId:row.bc_id||"",
-            bcPlan:row.bc_deadline||"",
-            committed:row.bc_committed||"",
-            bcWunsch:"",
-            fcMap:{},
-            wiIds:[],
-          };
-        }
-        var iss=issMap[issId];
-        // FC sammeln
-        if(row.fc_name){
-          var fk=row.fc_id||row.fc_name;
-          if(!iss.fcMap[fk])iss.fcMap[fk]={name:row.fc_name,id:row.fc_id||""};
-        }
-        // WI-ID sammeln
-        var wid=(row.wi_id||"").trim();
-        if(wid&&iss.wiIds.indexOf(wid)<0)iss.wiIds.push(wid);
+      Object.keys(issueIdx).forEach(function(id){
+        var x=issueIdx[id],fm={};
+        (x.fcs||[]).forEach(function(f){fm[f.id||f.name]={name:f.name,id:f.id||""};});
+        issMap[id]={id:id,title:x.t||id,lcs:x.l||"",bcName:x.bc||"",bcId:x.bcId||"",
+          bcPlan:x.bcPlan||"",committed:x.com||"",bcWunsch:"",fcMap:fm,wiIds:(x.wis||[]).slice()};
       });
       // 2. Pro Issue: Werte aus allPkgs aggregieren
       return Object.values(issMap).map(function(iss){
@@ -12588,16 +12766,24 @@ function Planungstool(){
         var totalHours=0,remainingHours=0,predStart="",predDelivery="";
         var hasStartedWI=false;
         var devSet={};
+        // v2.93.1: Restaufwand je Mitarbeiter. Ein Issue gehoert selten einem
+        // allein -- wer nur zwei von vier Workitems hat, traegt nur deren Rest.
+        var restByDev={};
         wis.forEach(function(p){
           totalHours+=(p.hours||0);
           var lcs=(p.lcs||"").toLowerCase();
-          if(lcs!=="closed"&&lcs!=="canceled") remainingHours+=(p.remainingHours||0);
+          if(lcs!=="closed"&&lcs!=="canceled"){
+            remainingHours+=(p.remainingHours||0);
+            var de=employees.find(function(e){return e.id===p.employee;});
+            var dk=(de&&de.name)?flowName(de):"Nicht zugewiesen";
+            restByDev[dk]=(restByDev[dk]||0)+(p.remainingHours||0);
+          }
           if(lcs==="started") hasStartedWI=true;
           if(!predStart||p.start<predStart) predStart=p.start||"";
           var ce=capEndMap[p.id]||p.end||"";
           if(ce>predDelivery) predDelivery=ce;
           var emp=employees.find(function(e){return e.id===p.employee;});
-          if(emp&&emp.name) devSet[emp.name]=true;
+          if(emp&&emp.name) devSet[flowName(emp)]=true;
         });
         var developers=Object.keys(devSet);
         var missing=[];
@@ -12611,6 +12797,7 @@ function Planungstool(){
           fcList:Object.values(iss.fcMap),
           totalHours:Math.round(totalHours*10)/10,
           remainingHours:Math.round(remainingHours*10)/10,
+          restByDev:restByDev,
           predStart:predStart,predDelivery:predDelivery,
           hasStartedWI:hasStartedWI,
           developers:developers,
@@ -12618,17 +12805,14 @@ function Planungstool(){
           missing:missing,
         };
       });
-    },[rawData,allPkgs,releases,employees,capEndMap]);
+    },[issueIdx,allPkgs,releases,employees,capEndMap,canSeeAll,selfEmp]);
 
     // ── Ampel ─────────────────────────────────────────────────────────
     function calcAmpel(iss){
       var pred=iss.predDelivery,plan=iss.bcPlan;
       if(iss.predStart&&iss.predStart<todayStr&&!iss.hasStartedWI&&iss.wis.length) return "clock";
       if(!pred||!plan) return "grey";
-      var diff=atDiff(plan,pred);
-      if(diff<=0) return "green";
-      if(diff<=DEADLINE_BUFFER) return "amber";
-      return "red";
+      return bcAmpel(plan,pred); // v2.92.2
     }
     // DEADLINE_BUFFER aus globalem Scope nutzen (bereits definiert)
 
@@ -12717,8 +12901,8 @@ function Planungstool(){
     ];
     var AMPEL_SYM={green:"🟢",amber:"🟡",red:"🔴",grey:"⚪",clock:"⏰"};
     var AMPEL_TIP={
-      green:"Rechtzeitig",amber:"Knapp (≤"+DEADLINE_BUFFER+" AT Puffer)",
-      red:"Kapazität reicht nicht",grey:"Keine Daten",
+      green:"Mehr als "+DEADLINE_BUFFER+" AT Puffer",amber:"Knapp (≤"+DEADLINE_BUFFER+" AT Puffer)",
+      red:"Prognose nach dem Zieltermin",grey:"Keine Daten",
       clock:"Überfällig – noch nicht gestartet"
     };
 
@@ -12826,6 +13010,7 @@ function Planungstool(){
       return ix>=0?ix+1:0;
     }
     function PriorityBadge(empName,issue){
+      if(empName===FLOW_OTHERS)return null; // v2.93.0
       var proPrio=getProPriority(empName,issue);
       var globalPrio=getGlobalPriority(issue);
       return React.createElement("span",{onClick:function(e){e.stopPropagation();setModal({type:"editPrio",emp:empName,issue:issue,currentPrio:proPrio});},
@@ -12907,7 +13092,7 @@ function Planungstool(){
           React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,marginTop:4,
             whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},
             Math.round(iss.remainingHours||0)+" h Rest \u00b7 "+(iss.wiCount||0)+" WI"
-            +((iss.developers&&iss.developers.length)?(" \u00b7 "+iss.developers.join(", ")):"")),
+            +(Object.keys(iss.restByDev||{}).length?(" \u00b7 "+restSplit(iss)):"")),
           // Aufgeklappt: die Workitems
           exp[iss.id]&&React.createElement("div",{style:{marginTop:6,paddingTop:6,
             borderTop:"1px solid "+A.border}},
@@ -12918,7 +13103,7 @@ function Planungstool(){
                 React.createElement("span",{style:{fontFamily:"var(--font-mono)",color:A.textLight,marginRight:4}},p.id),
                 wiLabel(p.title,iss.bcName,""),
                 React.createElement("span",{style:{color:A.textLight}},
-                  " \u00b7 "+(e?e.name:"?")+" \u00b7 "+kurz(capEndMap[p.id]||p.end)));
+                  " \u00b7 "+(e?flowName(e):"?")+" \u00b7 "+kurz(capEndMap[p.id]||p.end)));
             })
           )
         );
@@ -12972,15 +13157,21 @@ function Planungstool(){
           return React.createElement("div",{key:empName,style:{background:A.surface,border:"1px solid "+A.border,borderRadius:"var(--r-xl)",padding:16,flexShrink:0}},
             (function(){
             var emp=employees.find(function(e){return e.name===empName;});
-            var capHours=(emp?emp.hoursPerWeek:40)*4;
-            var usedHours=empIssues.reduce(function(sum,i){return sum+(i.remainingHours||0);},0);
+            // v2.93.2: Auslastung der naechsten 4 Wochen (20 AT) wie in der
+            // Auslastung: geplante Last im Fenster gegen verfuegbare Stunden
+            // ohne Abwesenheiten und Feiertage. Vorher stand hier der GESAMTE
+            // eigene Restaufwand gegen pauschal 4 Wochen Kapazitaet.
+            var wl=emp?windowLoad(emp.id,loadMap,absenceMap[emp.id],dailyCapacity(emp),todayStr,20):null;
+            var capHours=wl?wl.cap:0;
+            var usedHours=wl?wl.load:0;
             var pct=capHours>0?Math.round(usedHours/capHours*100):0;
             var badgeColor=pct>=100?"var(--c-coral-ink)":pct>=80?"var(--c-amber)":"var(--c-green)";
             var badgeBg=pct>=100?"var(--c-coral-light)":pct>=80?"var(--c-amber-light)":"var(--c-green-light)";
             return React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}},
               React.createElement("div",{style:{fontSize:"var(--fs-lg)",fontWeight:800,color:A.text}},"👤 "+empName),
-              React.createElement("span",{
-                title:"Auslastung: "+Math.round(usedHours*10)/10+"h von "+capHours+"h (4 Wochen)",
+              capHours>0&&React.createElement("span",{
+                "data-team-load":empName,
+                title:"N\u00e4chste 4 Wochen (20 AT): "+usedHours+"h geplant von "+capHours+"h verf\u00fcgbar (ohne Abwesenheiten und Feiertage, wie Auslastung)",
                 style:{fontSize:"var(--fs-md)",fontWeight:700,color:badgeColor,background:badgeBg,padding:"2px 8px",borderRadius:"var(--r-lg)"}},
                 pct+"%")
             );
@@ -13002,6 +13193,9 @@ function Planungstool(){
                           React.createElement("span",{style:{display:"flex",alignItems:"center",gap:4}},React.createElement(CopyID,{id:iss.id,label:"#"+iss.id})," "+(iss.title||"")),
                           BlockerIcon(iss),React.createElement(React.Fragment,null," "),PriorityBadge(empName,iss)),
                           React.createElement("div",{style:{display:"flex",gap:6,alignItems:"center"}},
+                            React.createElement("span",{"data-team-rest":iss.id,title:"Restaufwand nach Mitarbeiter:\n"+restSplit(iss,"\n"),
+                              style:{fontSize:"var(--fs-xs)",color:A.textMid,whiteSpace:"nowrap"}},
+                              restOf(iss,empName)+" h von "+iss.remainingHours+" h"),
                             iss.ampel==="red"?React.createElement("span",{style:{fontSize:"var(--fs-md)"}},"🔴"):iss.ampel==="amber"?React.createElement("span",null,"🟡"):React.createElement("span",null,"🟢"),
                             React.createElement("span",{style:{fontSize:"var(--fs-xs)",color:A.textLight}},isExp?"▾":"▸")
                           )
@@ -13225,10 +13419,10 @@ function Planungstool(){
         case "bcWunsch": return React.createElement("span",{style:{fontSize:"var(--fs-sm)",color:A.textLight}},fd(iss.bcWunsch)||"–");
         case "bcPlan":   return CellBCPlan(iss);
         case "committed":return React.createElement("span",{style:{fontSize:"var(--fs-sm)"}},fd(iss.committed)||"–");
-        case "rest":     return React.createElement("span",{style:{fontSize:"var(--fs-sm)",fontWeight:600,color:A.text}},iss.remainingHours+"h");
+        case "rest":     return React.createElement("span",{title:restSplit(iss,"\n")||"–",style:{fontSize:"var(--fs-sm)",fontWeight:600,color:A.text,cursor:"help"}},iss.remainingHours+"h");
         case "gesamt":   return React.createElement("span",{style:{fontSize:"var(--fs-sm)",color:A.textMid}},iss.totalHours+"h");
         case "entw":     return React.createElement("span",{
-          title:iss.developers.join("\n")||"–",
+          title:restSplit(iss,"\n")||iss.developers.join("\n")||"–",
           style:{fontSize:"var(--fs-sm)",fontWeight:700,cursor:"help"}
         },iss.developers.length||"–");
         case "progress": return CellProgress(iss);
@@ -13308,7 +13502,7 @@ function Planungstool(){
               style:{padding:"5px 10px",fontSize:"var(--fs-xs)",color:A.textMid}},
               [
                 ["LCS",pkg.lcs||"–"],
-                ["MA",emp?emp.name:"–"],
+                ["MA",emp?flowName(emp):"–"],
                 ["Start",pkg.start||"–"],
                 ["Ende",pkg.end||"–"],
                 ["Rest",(pkg.remainingHours||0)+"h"],
@@ -13324,9 +13518,11 @@ function Planungstool(){
     }
 
     // ── Leer-Zustand ─────────────────────────────────────────────────
-    if(!rawData||!rawData.length){
-      return React.createElement("div",{style:{padding:60,textAlign:"center",color:A.textLight,fontSize:"var(--fs-lg)"}},
-        "Keine Daten — bitte ClearQuest-Datei importieren.");
+    if(!issueIdx||!Object.keys(issueIdx).length){
+      return React.createElement("div",{"data-flow-empty":"1",style:{padding:60,textAlign:"center",color:A.textLight,fontSize:"var(--fs-lg)",lineHeight:1.6}},
+        "Flow zeigt die Issue-Ebene aus dem ClearQuest-Import.",React.createElement("br",null),
+        React.createElement("span",{style:{fontSize:"var(--fs-md)"}},
+          "Sie fehlt in diesem Datenstand \u2014 bitte einmal neu importieren. Danach bleibt sie auch nach einem Neustart erhalten."));
     }
 
     // ── Sortierung pro Lane ───────────────────────────────────────────
@@ -13865,7 +14061,7 @@ function Planungstool(){
               React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:14}},
                 React.createElement("div",null,React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}},"Mitarbeiter"),React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},r.emp&&React.createElement("div",{style:{width:26,height:26,borderRadius:"50%",background:empColor,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"var(--fs-2xs)",color:"var(--c-on-accent)",fontWeight:800}},getInitials(r.emp.name)),React.createElement("div",null,React.createElement("div",{style:{fontSize:"var(--fs-md)",fontWeight:700,color:A.text}},r.emp?r.emp.name:"–"),React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textLight}},r.emp?(r.emp.weeklyHours||35)+"h/Wo":"")))),
                 React.createElement("div",null,React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}},"Fortschritt"),React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:4}},React.createElement("div",{style:{flex:1,height:8,background:A.border,borderRadius:"var(--r-sm)",overflow:"hidden"}},React.createElement("div",{style:{width:done+"%",height:"100%",background:done===100?A.green:A.mint,borderRadius:"var(--r-sm)"}})),React.createElement("span",{style:{fontSize:"var(--fs-sm)",fontWeight:700}},done,"%")),React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textLight}},r.rem,"h verbl. / ",(r.pkg.hours||0),"h gesamt")),
-                React.createElement("div",null,React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}},"Zeitplan"),React.createElement("div",{style:{fontSize:"var(--fs-sm)",color:A.text}},"Start: ",r.pkg.start),React.createElement("div",{style:{fontSize:"var(--fs-sm)",color:A.textMid,textDecoration:r.computedEnd!==r.pkg.end?"line-through":"none"}},"Ende: ",r.pkg.end),r.computedEnd!==r.pkg.end&&React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,marginTop:3}},React.createElement("div",{style:{padding:"2px 8px",borderRadius:"var(--r-sm)",background:r.endShifted?A.greenLight:A.amberLight,fontSize:"var(--fs-sm)",fontWeight:800,color:r.endShifted?A.green:A.amber}},r.endShifted?"▲ ":"▼ ",r.capEnd),React.createElement("span",{style:{fontSize:"var(--fs-xs)",color:r.endShifted?A.green:A.amber}},r.endShifted?("-"+r.daysGained+" Tage"):("+"+r.daysLost+" Tage")))),
+                React.createElement("div",null,React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}},"Zeitplan"),React.createElement("div",{style:{fontSize:"var(--fs-sm)",color:A.text}},"Start: ",r.pkg.start),React.createElement("div",{style:{fontSize:"var(--fs-sm)",color:A.textMid,textDecoration:r.computedEnd!==r.pkg.end?"line-through":"none"}},"Ende: ",r.pkg.end),r.computedEnd!==r.pkg.end&&React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,marginTop:3}},React.createElement("div",{style:{padding:"2px 8px",borderRadius:"var(--r-sm)",background:r.endShifted?A.greenLight:A.amberLight,fontSize:"var(--fs-sm)",fontWeight:800,color:r.endShifted?A.green:A.amber}},r.endShifted?"▲ ":"▼ ",r.capEnd),React.createElement("span",{style:{fontSize:"var(--fs-xs)",color:r.endShifted?A.green:A.amber}},r.endShifted?("-"+r.daysGained+" AT"):("+"+r.daysLost+" AT")))),
                 React.createElement("div",null,React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}},"Deadlines"),
                   r.pkg.fcDueDate?React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:3}},React.createElement("span",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,width:22,fontWeight:700}},"FC:"),React.createElement("span",{style:{fontSize:"var(--fs-sm)",fontWeight:700,color:fcSt==="overdue"?A.coral:fcSt==="critical"?A.amber:A.green}},r.pkg.fcDueDate),fcSt!=="ok"&&React.createElement("span",{style:{fontSize:"var(--fs-2xs)",color:fcSt==="overdue"?A.coral:A.amber}},fcSt==="overdue"?"🔴":"⚠")):null,
                   r.pkg.bcDueDate?React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6}},React.createElement("span",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,width:22,fontWeight:700}},"BC:"),React.createElement("span",{style:{fontSize:"var(--fs-sm)",fontWeight:700,color:bcSt==="overdue"?A.coral:bcSt==="critical"?A.amber:A.green}},r.pkg.bcDueDate),bcSt!=="ok"&&React.createElement("span",{style:{fontSize:"var(--fs-2xs)",color:bcSt==="overdue"?A.coral:A.amber}},bcSt==="overdue"?"🔴":"⚠")):null,
@@ -14022,7 +14218,7 @@ function Planungstool(){
       _format:"planungstool-backup",
       _version:1,
       _exportedAt:new Date().toISOString(),
-      releases:s.releases,employees:s.employees,rawData:s.rawData,
+      releases:s.releases,employees:s.employees,rawData:s.rawData,issues:s.issueIdx||null, // v2.93.0
       absences:s.absences,customColors:s.customColors,
       manualBlockers:s.manualBlockers,prioOrder:s.prioOrder,
       laneOverrides:s.laneOverrides,wipLimits:s.wipLimits,
@@ -14073,6 +14269,7 @@ function Planungstool(){
         if(p.releases)setReleases(p.releases);
         if(p.employees)setEmployees(p.employees);
         if(p.rawData)setRawData(p.rawData);
+        if(isIssueIndex(p.issues)){setIssueIdx(p.issues);try{localStorage.setItem("ptool_issues",JSON.stringify(p.issues));}catch(e){}} // v2.93.0
         if(p.absences)setAbsences(p.absences);
         if(p.customColors)setCustomColors(p.customColors);
         if(p.manualBlockers)setManualBlockers(p.manualBlockers);
@@ -14279,83 +14476,9 @@ function Planungstool(){
   // parallel zur Planungsstand-Verwaltung und verglich nur Kalendertage.
   // Vorhandene Altstaende werden beim Start migriert, siehe
   // migrateLegacySnapshot().
-  // ── Was-wäre-wenn: Abwesenheits-Simulation ───────────────────────
-  function runWhatIfSim(empId,from,to){
-    var simAbs=absences.concat([{id:"_sim",employee:empId,start:from,end:to,type:"Simulation"}]);
-    // v2.88.3: dieselbe Karte wie die Basisanalyse, plus der simulierte Ausfall.
-    // Sonst verglich die Simulation ohne Feiertage gegen eine Basis mit.
-    var simMap={};
-    Object.keys(absenceMap).forEach(function(id){simMap[id]=Object.assign({},absenceMap[id]);});
-    getDays(from,to).forEach(function(d){if(!simMap[empId])simMap[empId]={};simMap[empId][dateStr(d)]="Simulation";});
-    var sim=runAnalysis(releases,employees,simAbs,simMap);
-    var simById={};sim.forEach(function(r){if(r&&r.pkg)simById[r.pkg.id]=r;});
-    var impacts=[];
-    analysis.forEach(function(base){
-      if(!base||!base.pkg)return;
-      var s=simById[base.pkg.id];if(!s)return;
-      var delta=workdaysBetween2(base.capEnd,s.capEnd); // v2.88.3: AT
-      if(delta<=0)return;
-      var bcDue=base.pkg.bcDueDate||"";
-      var brokeBc=!!(bcDue&&s.capEnd>bcDue&&base.capEnd<=bcDue);
-      var emp=base.emp?base.emp.name:"";
-      impacts.push({id:base.pkg.id,rn:base.pkg.rn,title:base.pkg.title||"",emp:emp,
-        delta:delta,brokeBc:brokeBc,bcName:base.pkg.rn||"",bcDue:bcDue,
-        newEnd:s.capEnd,statusWorse:base.status!=="replan"&&s.status==="replan"});
-    });
-    impacts.sort(function(a,b){return (b.brokeBc-a.brokeBc)||(b.delta-a.delta);});
-    return impacts;
-  }
-
-  function renderWhatIfModal(){
-    if(!modal||modal.type!=="whatif")return null;
-    var m=modal;
-    function upd(k,v){var n=Object.assign({},m);n[k]=v;n.result=null;setModal(n);}
-    var canSim=m.emp&&m.from&&m.to&&m.from<=m.to;
-    return React.createElement("div",{style:{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999},onClick:function(){setModal(null);}},
-      React.createElement("div",{className:"glass-modal",style:{background:A.surface,borderRadius:"var(--r-xl)",padding:24,maxWidth:560,width:"92vw",maxHeight:"82vh",overflow:"auto",border:"1px solid "+A.border,boxShadow:"0 20px 40px rgba(0,0,0,0.25)"},onClick:function(e){e.stopPropagation();}},
-        React.createElement("div",{style:{fontSize:"var(--fs-lg)",fontWeight:800,color:A.text,marginBottom:4}},"🔮 Was-wäre-wenn: Abwesenheit simulieren"),
-        React.createElement("div",{style:{fontSize:"var(--fs-sm)",color:A.textMid,marginBottom:16}},"Auswirkung prüfen, ohne die Abwesenheit einzutragen."),
-        React.createElement("div",{style:{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end",marginBottom:16}},
-          React.createElement("div",null,
-            React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.textMid,marginBottom:3}},"Mitarbeiter"),
-            React.createElement("select",{value:m.emp||"",onChange:function(e){upd("emp",e.target.value);},
-              style:{padding:"7px 10px",borderRadius:"var(--r-md)",border:"1px solid "+A.border,fontSize:"var(--fs-md)",background:A.bg,color:A.text}},
-              React.createElement("option",{value:""},"– wählen –"),
-              employees.slice().sort(function(a,b){return(a.name||"").localeCompare(b.name||"");}).map(function(e){
-                return React.createElement("option",{key:e.id,value:e.id},e.name);}))),
-          React.createElement("div",null,
-            React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.textMid,marginBottom:3}},"Von"),
-            React.createElement("input",{type:"date",value:m.from||"",onChange:function(e){upd("from",e.target.value);},
-              style:{padding:"6px 8px",borderRadius:"var(--r-md)",border:"1px solid "+A.border,fontSize:"var(--fs-md)"}})),
-          React.createElement("div",null,
-            React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.textMid,marginBottom:3}},"Bis"),
-            React.createElement("input",{type:"date",value:m.to||"",onChange:function(e){upd("to",e.target.value);},
-              style:{padding:"6px 8px",borderRadius:"var(--r-md)",border:"1px solid "+A.border,fontSize:"var(--fs-md)"}})),
-          React.createElement("button",{disabled:!canSim,
-            onClick:function(){var res=runWhatIfSim(m.emp,m.from,m.to);var n=Object.assign({},m);n.result=res;setModal(n);},
-            style:{padding:"8px 16px",borderRadius:"var(--r-md)",border:"none",background:canSim?A.sky:A.border,color:"white",cursor:canSim?"pointer":"default",fontSize:"var(--fs-md)",fontWeight:700}},"Simulieren")),
-        m.result&&(m.result.length===0
-          ?React.createElement("div",{style:{padding:"14px",background:"var(--c-green-light)",borderRadius:"var(--r-lg)",fontSize:"var(--fs-md)",color:"var(--c-green-ink)",fontWeight:700}},"✅ Keine Auswirkungen — kein Workitem verschiebt sich.")
-          :React.createElement("div",null,
-            React.createElement("div",{style:{display:"flex",gap:10,marginBottom:10,fontSize:"var(--fs-md)"}},
-              React.createElement("span",{style:{fontWeight:800,color:A.text}},m.result.length+" Workitem"+(m.result.length!==1?"s":"")+" betroffen"),
-              (function(){var n=m.result.filter(function(r){return r.brokeBc;}).length;
-                return n>0?React.createElement("span",{style:{fontWeight:800,color:"var(--c-coral-ink)"}},"⚠️ "+n+"× BC-Deadline gerissen"):null;})()),
-            m.result.slice(0,15).map(function(r,i){
-              return React.createElement("div",{key:i,style:{padding:"8px 10px",borderRadius:"var(--r-md)",marginBottom:6,
-                background:r.brokeBc?"var(--c-coral-light)":"var(--c-amber-light)",border:"1px solid "+(r.brokeBc?"var(--c-coral-line)":"var(--c-amber-line)")}},
-                React.createElement("div",{style:{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}},
-                  React.createElement(CopyID,{id:r.id,label:r.id,style:{fontSize:"var(--fs-2xs)"}}),
-                  React.createElement("span",{style:{fontWeight:700,fontSize:"var(--fs-sm)",color:A.text}},(r.title||"").substring(0,45)),
-                  React.createElement("span",{style:{fontSize:"var(--fs-sm)",fontWeight:800,color:r.brokeBc?"var(--c-coral-ink)":"var(--c-amber-ink)"}},"+"+r.delta+" AT")),
-                React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textMid,marginTop:2}},
-                  r.emp+" · neues Ende "+r.newEnd+(r.brokeBc?" · ⚠️ über BC-Deadline "+r.bcDue:""))) ;}),
-            m.result.length>15&&React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textMid}},"+"+(m.result.length-15)+" weitere"))),
-        React.createElement("button",{onClick:function(){setModal(null);},
-          style:{width:"100%",marginTop:14,padding:"8px",borderRadius:"var(--r-md)",border:"1px solid "+A.border,background:"transparent",cursor:"pointer",color:A.textMid,fontSize:"var(--fs-md)"}},"Schließen")));
-  }
-
-  // ── Quick-Win: Drucken mit Auswahl ──────────────────────────
+  // v2.93.0: Das Fenster \"Was-waere-wenn: Abwesenheit simulieren\" (runWhatIfSim,
+  // renderWhatIfModal) ist entfallen. Kein Bedienelement hat es je geoeffnet;
+  // dieselbe Frage beantworten die Szenarien (Ausfall annehmen, vergleichen).
   function renderPrintModal(){
     if(!modal||modal.type!=="print")return null;
     var opts=[
@@ -14796,14 +14919,9 @@ function Planungstool(){
               border:"1.5px solid "+(showWiLevel?A.mint:A.border),
               background:showWiLevel?A.mintLight:"transparent",
               color:showWiLevel?A.mint:A.textMid,flexShrink:0,whiteSpace:"nowrap"}},
-            showWiLevel?"Workitems sichtbar":"Nur FC-Ebene"),
-          (view!=="umplanung"&&view!=="planist"&&view!=="architektur"&&view!=="anforderungen"&&view!=="testfaelle"&&view!=="rohdaten"&&view!=="zeit"&&view!=="dashboard"&&view!=="szenarien"&&view!=="report")&&modOn("vision")&&React.createElement("button",{onClick:function(){setSimMode(function(x){return !x;});},
-            "data-sim-btn":"1",
-            title:"Simulationsmodus: zeigt wie die Planung nach Umplanung aussehen w\u00fcrde",
-            style:{padding:"5px 12px",borderRadius:"var(--r-pill)",cursor:"pointer",fontSize:"var(--fs-sm)",fontWeight:700,
-              border:"1.5px solid "+(simMode?A.amber:A.border),background:simMode?"var(--c-on-accent)":"transparent",
-              color:simMode?A.amber:A.textMid,display:"flex",alignItems:"center",gap:5,flexShrink:0}},
-            React.createElement("span",null,"\u26A1"),simMode?"Simulation AN":"Simulation AUS"),
+            (showWiLevel?"\u2611 ":"\u2610 ")+"Workitems"), // v2.93.0: Schalter statt Zustandstext
+          // v2.93.0: Der Knopf \"Simulation AN/AUS\" ist entfallen. Allein geschaltet
+          // aenderte er nichts -- neu berechnet werden nur BCs mit aktivem \u21c4.
           // ── v2.67.0: Filtermenue ───────────────────────────────────
           // Erscheint nur dort, wo die Filter auch wirken.
           (view==="auslastung"||view==="bcplanung"||view==="umplanung"||view==="konflikte"||view==="flow"||view==="mitarbeiter")
@@ -15017,7 +15135,8 @@ function Planungstool(){
     ),
 
     // v2.52.0: Startsequenz liegt ueber allem, bis ein Name bestaetigt wurde.
-    dashUser===null&&React.createElement(BootScreen,null),
+    dashUser===null&&React.createElement(BootScreenOverlay,{recentNames:recentNames,
+      onConfirm:confirmDashUser,onSkip:function(){setDashUser("");}}),
 
     qsOpen&&React.createElement(QuickSelectOverlay,{
       items:openWorkitems,istByWi:timeByWi,
@@ -15141,7 +15260,6 @@ function Planungstool(){
     modal&&modal.type==="addBlocker"&&renderBlockerModal(),
     modal&&modal.type==="fcDetail"&&renderFcDetailModal(),
     modal&&modal.type==="print"&&renderPrintModal(),
-    modal&&modal.type==="whatif"&&renderWhatIfModal(),
     modal&&modal.type==="laneMenu"&&renderLaneMenu(),
     modal&&modal.type==="editPrio"&&renderPriorityModal(),
     modal==="editPkg"&&editPkg&&React.createElement(EditPkgModal,{
