@@ -2537,7 +2537,35 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="2.93.2";
+var APP_VERSION="2.94.0";
+
+// v2.94.0: Prognose nacheinander je Mitarbeiter (Entscheidung Maik).
+//          Bisher rechnete jedes Workitem, als haette es den Mitarbeiter fuer
+//          sich allein, und eine Pauschale (Aufschlag ab 80 % Last, je WI)
+//          schob danach Tage auf -- zwei parallele WIs mit zusammen 70 h
+//          landeten beide hinter dem 10. Arbeitstag. Jetzt bucht runAnalysis
+//          je Mitarbeiter einen Kalender freier Stunden: Reihenfolge
+//          BC-Ziel, dann Planstart, dann Kennung; Start frueestens heute, am
+//          Planstart und am Tag nach den Vorgaengern; spaeter priorisierte
+//          WIs fuellen Luecken. WIs unter nicht freigegebenen Issues kommen
+//          zuletzt und belegen nichts. Die Pauschale entfaellt.
+//          Die Anzeige der Last (Zeitstrahl, Matrix, Ampel-Status) bleibt
+//          planbasiert -- sie zeigt, wo der Plan nicht aufgeht.
+
+// v2.93.3: Die Lastkarte verlor Restaufwand. Der Rest wurde ueber die ganze
+//          geplante Laufzeit verteilt, gebucht aber nur ab heute -- bei einem
+//          halb gelaufenen WI fehlte die Haelfte, ein ueberfaelliges WI
+//          verschwand ab heute ganz (8 h auf einem vergangenen Tag statt 40 h).
+//          Jetzt liegt der Rest vollstaendig ab heute: ueber die verbleibenden
+//          geplanten Tage, je Tag hoechstens die Tageskapazitaet, der Ueberhang
+//          laeuft ueber das geplante Ende hinaus. Noch nicht begonnene WIs
+//          bleiben, wie sie sind. Im Zeitstrahl zeigen vergangene Tage die
+//          geleistete Arbeit (Aufwand minus Rest).
+//          Wirkung: Auslastung, Matrix, Flow-Team, Dashboard und die
+//          Ueberlast-Pruefung der Analyse sehen mehr Last -- mehr Rot, und
+//          Prognosen koennen sich nach hinten verschieben.
+//          Lehre: Ein Restwert ist schon eine Differenz. Wer ihn noch einmal
+//          anteilig kuerzt, zieht das Geleistete zweimal ab.
 
 // v2.93.2: Flow-Team -- die Prozentzahl gilt fuer die naechsten 4 Wochen.
 //          Geplante Last im Fenster (dieselbe Lastkarte wie Zeitstrahl und
@@ -3837,7 +3865,7 @@ function countsForEffort(pkg){
 }
 // Tageslast-Map: MA-ID → Datum → Stunden (genutzt von runAnalysis + KapazitaetView)
 // v2.88.3: opts.chargePast belastet auch vergangene Tage (fuer die Anzeige
-// im Zeitstrahl). Tagessatz und Auswahl sind in beiden Faellen dieselben.
+// im Zeitstrahl). Ab heute sind beide Faelle identisch (v2.93.3).
 function buildLoadMap(allPkgs,employees,today,opts){
   var chargePast=!!(opts&&opts.chargePast);
   var loadMap={};employees.forEach(function(e){loadMap[e.id]={};});
@@ -3845,19 +3873,45 @@ function buildLoadMap(allPkgs,employees,today,opts){
     if(p.lcs==="closed")return;
     var rem=(p.remainingHours!=null&&p.remainingHours>=0)?p.remainingHours:p.hours;
     if(!rem)return;
-    // Auslastung über die VOLLE geplante Laufzeit verteilen (nicht nur Resttage).
-    // Würde man nur über verbleibende Tage teilen, entstehen bei fast-abgelaufenen
-    // Paketen unmögliche Spitzenwerte (z.B. 590% bei 40h Rest auf 1 verbleibenden Tag).
     if(!p.start||!p.end)return;
     if(!countsForEffort(p))return; // Punkt 2: nur evaluated/committed Issues belasten
     var workDays=getDays(p.start,p.end).filter(function(d){return !isWE(d);});
     if(!workDays.length)return;
-    var dailyLoad=rem/workDays.length; // h/Tag homogen über gesamte AT
     if(!loadMap[p.employee])loadMap[p.employee]={};
-    // Nur noch zukünftige Tage tatsächlich belasten (vergangene gelten als geleistet)
-    var chargeDays=chargePast?workDays:workDays.filter(function(d){return dateStr(d)>=today;});
-    if(!chargeDays.length)chargeDays=workDays.slice(-1);
-    chargeDays.forEach(function(d){var k=dateStr(d);loadMap[p.employee][k]=(loadMap[p.employee][k]||0)+dailyLoad;});
+    var lm=loadMap[p.employee];
+    function add(k,h){if(h>0)lm[k]=(lm[k]||0)+h;}
+    // v2.93.3: Der Rest ist, was NOCH fehlt -- er gehoert vollstaendig auf die
+    // Tage ab heute. Bis v2.93.2 wurde er ueber die GANZE Laufzeit verteilt
+    // und nur der Anteil ab heute gebucht: ein WI 05.-16.10. mit 40 h Rest
+    // zeigte am 12.10. nur 20 h Last, ein ueberfaelliges WI 8 h auf einem
+    // vergangenen Tag und ab heute gar nichts.
+    var future=workDays.filter(function(d){return dateStr(d)>=today;});
+    if(future.length===workDays.length){
+      // Noch nicht begonnen: unveraendert ueber die geplante Laufzeit.
+      var rate=rem/workDays.length;
+      workDays.forEach(function(d){add(dateStr(d),rate);});
+      return;
+    }
+    // Laeuft oder ist ueberfaellig. Die Last je Tag ist auf die Tageskapazitaet
+    // des Mitarbeiters gedeckelt; was in der geplanten Zeit nicht unterkommt,
+    // laeuft ueber das geplante Ende hinaus weiter. So verschwinden keine
+    // Stunden, und es entstehen keine unmoeglichen Spitzen (40 h Rest am
+    // letzten Tag = 500 %) -- der Grund, aus dem frueher ueber die ganze
+    // Laufzeit verteilt wurde.
+    var emp=(employees||[]).find(function(e){return e.id===p.employee;});
+    var hpd=emp?dailyCapacity(emp):8;
+    var perDay=future.length?Math.min(hpd,rem/future.length):hpd;
+    var left=rem,d=localDay(today),g=0;
+    while(left>1e-9&&g++<2000){
+      if(!isWE(d)){var h=Math.min(perDay,left);add(dateStr(d),h);left-=h;}
+      d.setDate(d.getDate()+1);
+    }
+    // Rueckschau (Zeitstrahl): vergangene Tage zeigen die geleistete Arbeit.
+    if(chargePast){
+      var past=workDays.filter(function(x){return dateStr(x)<today;});
+      var done=Math.max(0,(p.hours||0)-rem);
+      if(past.length&&done>0)past.forEach(function(x){add(dateStr(x),done/past.length);});
+    }
   });
   return loadMap;
 }
@@ -3874,72 +3928,94 @@ function runAnalysis(releases,employees,absences,absMapIn){
   var pkgById={};allPkgs.forEach(function(p){pkgById[p.id]=p;});
   var loadMap=buildLoadMap(allPkgs,employees,today);
 
-  // Topologische Sortierung (Kahn) damit capEnd von Vorgängern zu Nachfolgern propagiert
-  var inDeg={},adj={};
-  allPkgs.forEach(function(p){inDeg[p.id]=0;adj[p.id]=[];});
-  allPkgs.forEach(function(p){(p.dependencies||[]).forEach(function(dId){if(adj[dId])adj[dId].push(p.id);inDeg[p.id]=(inDeg[p.id]||0)+1;});});
-  var queue=allPkgs.filter(function(p){return inDeg[p.id]===0;}).map(function(p){return p.id;});
-  var topoOrder=[];
-  while(queue.length){var cur=queue.shift();topoOrder.push(cur);(adj[cur]||[]).forEach(function(nxt){inDeg[nxt]--;if(inDeg[nxt]===0)queue.push(nxt);});}
-  // Pakete die in keinem Zyklus landen, restliche anhängen
-  allPkgs.forEach(function(p){if(topoOrder.indexOf(p.id)<0)topoOrder.push(p.id);});
-
-  // capEnd-Map: wird während Analyse befüllt und von Nachfolgern gelesen
-  var computedCapEnd={};
-  allPkgs.forEach(function(p){computedCapEnd[p.id]=p.end;});
-
-  var resultMap={};
-
-  topoOrder.forEach(function(pkgId){
-    var pkg=pkgById[pkgId];if(!pkg)return;
+  // ════════════════════════════════════════════════════════════════
+  // v2.94.0: Prognose NACHEINANDER je Mitarbeiter (Entscheidung Maik).
+  // Jeder Mitarbeiter hat einen Kalender freier Stunden. Die Workitems
+  // werden in fester Reihenfolge eingebucht -- frühestes BC-Ziel zuerst,
+  // dann Planstart, dann Kennung -- und belegen ab ihrem frühesten Start
+  // (heute, Planstart, Tag nach dem Ende der Vorgänger) die freien Stunden.
+  // Ein später priorisiertes WI füllt Lücken, die ein früheres offen lässt.
+  // WIs unter nicht freigegebenen Issues (countsForEffort=false) kommen
+  // zuletzt und belegen NICHTS: ihre Prognose zeigt, wann Platz wäre.
+  // Ersetzt die Überlast-Pauschale (Aufschlag ab 80 %, je WI für sich), die
+  // parallele WIs beide weit hinter ihre tatsächliche Summe schob.
+  // ════════════════════════════════════════════════════════════════
+  var computedCapEnd={},done={},resultMap={};
+  var cal={}; // empId -> {Datum: belegte Stunden}
+  function prioCmp(a,b){
+    var ga=countsForEffort(a)?0:1,gb=countsForEffort(b)?0:1;
+    if(ga!==gb)return ga-gb;
+    var da=a.bcDueDate||"9999-99-99",db=b.bcDueDate||"9999-99-99";
+    if(da!==db)return da<db?-1:1;
+    var sa=a.start||"",sb=b.start||"";
+    if(sa!==sb)return sa<sb?-1:1;
+    var ia=String(a.id),ib=String(b.id);
+    return ia<ib?-1:ia>ib?1:0;
+  }
+  // Bucht rem Stunden ab from; commit=false rechnet nur (fuer nicht
+  // freigegebene WIs). Rueckgabe: erster und letzter Tag mit Stunden.
+  function book(c,from,rem,hpd,empAbs,commit){
+    if(!(rem>0)||!(hpd>0))return {start:from,end:from};
+    var d=localDay(from),left=rem,first="",last=from,g=0;
+    while(left>1e-9&&g++<5000){
+      if(!isWE(d)){
+        var k=dateStr(d);
+        if(!empAbs[k]){
+          var free=hpd-(c[k]||0);
+          if(free>1e-9){
+            var u=Math.min(free,left);
+            if(commit)c[k]=(c[k]||0)+u;
+            left-=u;if(!first)first=k;last=k;
+          }
+        }
+      }
+      if(left>1e-9)d.setDate(d.getDate()+1);
+    }
+    return {start:first||from,end:last};
+  }
+  // Erledigtes und Undatiertes steht fest, bevor gebucht wird.
+  var pending=[];
+  allPkgs.forEach(function(p){
+    if(p.lcs==="closed"||!p.start||!p.end){computedCapEnd[p.id]=p.end||"";done[p.id]=true;}
+    else pending.push(p);
+  });
+  pending.sort(prioCmp);
+  var guardN=0;
+  while(pending.length&&guardN++<100000){
+    // Erstes WI in Rangfolge, dessen Vorgaenger alle eingeplant sind. Gibt
+    // es keines (Zyklus), das erste ueberhaupt -- mit dem, was feststeht.
+    var idx=-1;
+    for(var i=0;i<pending.length;i++){
+      var ok=(pending[i].dependencies||[]).every(function(d){return !pkgById[d]||done[d];});
+      if(ok){idx=i;break;}
+    }
+    if(idx<0)idx=0;
+    var pkg=pending.splice(idx,1)[0],pkgId=pkg.id;
     var emp=employees.find(function(e){return e.id===pkg.employee;});
     var cap=emp?dailyCapacity(emp):8;
-    var hpd=emp?(emp.weeklyHours||35)/5:8;
-    if(!pkg.start||!pkg.end)return; // Skip WI ohne Datum
+    var hpd=cap;
     var empAbs=absMap[pkg.employee]||{};
     var rem=(pkg.remainingHours!=null&&pkg.remainingHours>=0)?pkg.remainingHours:pkg.hours;
     var planStart=pkg.start>today?pkg.start:today;
-    // Vorgänger: capEnd nutzen (nicht originales end)
     var depMaxEnd=(pkg.dependencies||[]).reduce(function(mx,depId){
-      var depCapEnd=computedCapEnd[depId]||"";
-      return depCapEnd>mx?depCapEnd:mx;
+      var e=computedCapEnd[depId]||"";return e>mx?e:mx;
     },"");
     var depConstrainedStart=depMaxEnd?nextWorkday(depMaxEnd):"";
     var effectiveStart=depConstrainedStart>planStart?depConstrainedStart:planStart;
-    var computedEnd=calcEndDate(effectiveStart,rem,empAbs,hpd);
+    var c=emp?(cal[emp.id]||(cal[emp.id]={})):{}; // ohne Mitarbeiter: eigener Kalender
+    var bk=book(c,effectiveStart,rem,hpd,empAbs,countsForEffort(pkg));
+    var capEnd=bk.end,computedEnd=bk.end;
+    computedCapEnd[pkgId]=capEnd;done[pkgId]=true;
     var pkgDays=getDays(pkg.start,pkg.end).filter(function(d){return !isWE(d)&&!empAbs[dateStr(d)];});
     var hardDays=pkgDays.filter(function(d){return((loadMap[pkg.employee]||{})[dateStr(d)]||0)/cap>REPLAN_THRESHOLD;});
     var softDays=pkgDays.filter(function(d){var u=((loadMap[pkg.employee]||{})[dateStr(d)]||0)/cap;return u>TARGET_UTIL&&u<=REPLAN_THRESHOLD;});
     var maxLoad=0;pkgDays.forEach(function(d){var l=(loadMap[pkg.employee]||{})[dateStr(d)]||0;if(l>maxLoad)maxLoad=l;});
-    var capEnd=computedEnd;
-    // v2.92.2: Ein Workitem, dessen Prognose hinter dem geplanten Ende liegt,
-    // ist mindestens PUFFER -- auch wenn kein Tag ueberlastet ist (Verzug
-    // durch einen Vorgaenger oder durch einen Start in der Vergangenheit).
-    // Bis v2.92.1 stand es gruen in der Spalte OK, mit \"+2 AT\" daneben.
-    // v2.84.0: EINHEITENFEHLER. totalExcess ist die Summe der ueberzaehligen
-    // STUNDEN an den ueberlasteten Tagen. Sie wurde ohne Umrechnung als
-    // Anzahl ARBEITSTAGE angehaengt -- ein Tag mit 2,75 h Ueberlast kostete
-    // damit vier volle Tage statt eines halben. Weil capEnd eines Vorgaengers
-    // der frueheste Start des Nachfolgers ist, wanderte der Fehler die
-    // Abhaengigkeitskette entlang und multiplizierte sich; so entstanden
-    // Prognosen Monate hinter dem Plan.
-    if(hardDays.length>0){
-      var totalExcess=hardDays.reduce(function(s,d){
-        var load=(loadMap[pkg.employee]||{})[dateStr(d)]||0;
-        return s+Math.max(0,load-(cap*TARGET_UTIL));
-      },0);
-      // Ueberstunden durch Tageskapazitaet = zusaetzlich benoetigte Tage.
-      var extraDays=Math.ceil(totalExcess/Math.max(1,cap));
-      var nd=new Date(computedEnd),added=0;
-      while(added<extraDays){nd.setDate(nd.getDate()+1);if(!isWE(nd))added++;}
-      capEnd=dateStr(nd);
-    }
-    // capEnd für Nachfolger merken
-    computedCapEnd[pkgId]=capEnd;
+    // v2.92.2: Prognose hinter dem Planende = mindestens PUFFER.
     var endShifted=capEnd<pkg.end,endDelayed=capEnd>pkg.end;
     var indirectlyAffected=allPkgs.filter(function(other){return (other.dependencies||[]).indexOf(pkg.id)>=0&&capEnd>=other.start;}).map(function(o){return o.id;});
-    resultMap[pkgId]={pkg:pkg,emp:emp,rem:rem,planStart:effectiveStart,computedEnd:computedEnd,capEnd:capEnd,endShifted:endShifted,endDelayed:endDelayed,daysGained:endShifted?workdaysBetween2(capEnd,pkg.end):0,daysLost:endDelayed?workdaysBetween2(pkg.end,capEnd):0,hardDays:hardDays.length,softDays:softDays.length,maxUtil:Math.round((maxLoad/cap)*100),depConstrainedStart:depConstrainedStart,indirectlyAffected:indirectlyAffected,status:hardDays.length>0?"replan":(softDays.length>0||endDelayed)?"puffer":"ok"};
-  });
+    resultMap[pkgId]={pkg:pkg,emp:emp,rem:rem,planStart:bk.start,computedEnd:computedEnd,capEnd:capEnd,endShifted:endShifted,endDelayed:endDelayed,daysGained:endShifted?workdaysBetween2(capEnd,pkg.end):0,daysLost:endDelayed?workdaysBetween2(pkg.end,capEnd):0,hardDays:hardDays.length,softDays:softDays.length,maxUtil:Math.round((maxLoad/cap)*100),depConstrainedStart:depConstrainedStart,indirectlyAffected:indirectlyAffected,status:hardDays.length>0?"replan":(softDays.length>0||endDelayed)?"puffer":"ok",
+      reserves:countsForEffort(pkg)};
+  }
   return allPkgs.filter(function(p){return p.lcs!=="closed";}).map(function(p){return resultMap[p.id];}).filter(Boolean);
 }
 
