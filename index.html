@@ -2545,7 +2545,12 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="2.97.0";
+var APP_VERSION="2.97.1";
+// v2.97.1: Restaufwand aendern verschob fremde Termine. propagateDependencies
+//   ignorierte changedPkgId und schob JEDES Workitem im Plan, das vor dem Ende
+//   seines Vorgaengers startet (bei CQ-Daten viele). Jetzt nur das geaenderte
+//   WI und seine Nachfolger. Das Bearbeiten-Fenster schreibt nur, was sich
+//   geaendert hat: reiner Restaufwand -> keine Termine, keine Kette.
 // v2.97.0: Umplanung nennt den Grund (Entscheidung Maik: automatisch, kein
 //   Freitext). runAnalysis legt je Workitem r.grund an -- Auslastung (Spitze,
 //   Tag, gleichzeitige WIs), Vorgaenger, zu wenig Kapazitaet bis Planende,
@@ -3448,7 +3453,16 @@ function propagateDependencies(releases, absenceMap, changedPkgId, employees) {
   while(queue.length){var cur=queue.shift();sorted.push(cur);(adj[cur]||[]).forEach(function(next){inDegree[next]--;if(inDegree[next]===0)queue.push(next);});}
   var updatedEnds={};
   allPkgs.forEach(function(x){updatedEnds[x.pkg.id]=x.pkg.end;});
+  // v2.97.1: Nur das geaenderte Workitem und alles, was (transitiv) daran
+  // haengt. Vorher lief die Schleife ueber den ganzen Plan -- jede Aenderung
+  // "reparierte" nebenbei fremde Ueberlappungen aus dem Import.
+  var scope=null;
+  if(changedPkgId&&pkgById[changedPkgId]){
+    scope={};var st=[changedPkgId];
+    while(st.length){var cid=st.pop();if(scope[cid])continue;scope[cid]=true;(adj[cid]||[]).forEach(function(n){st.push(n);});}
+  }
   sorted.forEach(function(pkgId){
+    if(scope&&!scope[pkgId])return;
     var x=pkgById[pkgId];if(!x)return;
     var deps=x.pkg.dependencies||[];if(deps.length===0)return;
     var maxDepEnd=deps.reduce(function(mx,depId){var depEnd=updatedEnds[depId]||"";return depEnd>mx?depEnd:mx;},"");
@@ -4296,7 +4310,16 @@ function EditPkgModal(p){
           })
         )
       ),
-      React.createElement("button",{onClick:function(){updatePkgDates(pkg.id,editStart,editEnd,remH2);updatePkgDependencies(pkg.id,selDeps);onClose();},
+      React.createElement("button",{"data-edit-save":"1",onClick:function(){
+          // v2.97.1: nur schreiben, was sich geaendert hat. Reiner Restaufwand
+          // laesst Termine und Kette in Ruhe.
+          var oldDeps=(pkg.dependencies||[]).slice().sort().join("|"),newDeps=selDeps.slice().sort().join("|");
+          var datesChg=editStart!==pkg.start||editEnd!==pkg.end, depsChg=oldDeps!==newDeps;
+          var remChg=remH2!==(pkg.remainingHours!=null?pkg.remainingHours:(pkg.hours||0));
+          if(datesChg)updatePkgDates(pkg.id,editStart,editEnd,remH2);
+          else if(remChg)updatePkgRemaining(pkg.id,remH2);
+          if(depsChg)updatePkgDependencies(pkg.id,selDeps);
+          onClose();},
         style:{background:A.mint,border:"none",borderRadius:"var(--r-lg)",padding:"10px 20px",color:A.onLight,fontSize:"var(--fs-base)",fontWeight:700,cursor:"pointer",width:"100%",marginTop:6,display:"flex",alignItems:"center",justifyContent:"center",gap:6}},
         "✓ Uebernehmen & Kette aktualisieren"
       ),
@@ -6842,10 +6865,12 @@ function Planungstool(){
     setReleases(function(prev){
       var updated=prev.map(function(r){
         var empAbs2=absenceMap[r.id]||{};
-        function upd(p){if(p.id!==pkgId)return p;var em=employees.find(function(e){return e.id===p.employee;});var hpd=(em&&em.weeklyHours||35)/5;var empAbs=absenceMap[p.employee]||{};var planStart=p.start>dateStr(new Date())?p.start:dateStr(new Date());var newEnd=calcEndDate(planStart,newRemaining,empAbs,hpd);return{...p,remainingHours:newRemaining,end:newEnd};}
+        // v2.97.1: Nur der Restaufwand. Plantermine bleiben, wie sie sind --
+        // die Prognose (capEnd) zeigt, was der neue Rest fuer das Ende bedeutet.
+        function upd(p){if(p.id!==pkgId)return p;return{...p,remainingHours:newRemaining};}
         return{...r,directPackages:(r.directPackages||[]).map(upd),components:r.components.map(function(c){return{...c,packages:c.packages.map(upd)};})};
       });
-      return propagateDependencies(updated,absenceMap,pkgId,employees);
+      return updated;
     });
   }
   function updatePkgDependencies(pkgId,newDeps){
