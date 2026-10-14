@@ -2545,7 +2545,26 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="2.96.3";
+var APP_VERSION="2.96.5";
+// v2.96.5: Flow-Sortierung ueberlebt den Neustart (ptool_flow_sort, Ansichts-
+//   einstellung wie ptool_bc_sort, daher nicht im Lizenztor). Ist die sortierte
+//   Spalte ausgeblendet, gilt die Ausgangsreihenfolge.
+//   Committed-Termin (ImplementationFreeze) wird beim Import wie BC-/FC-Ziel nach
+//   JJJJ-MM-TT gewandelt; ein bereits gespeicherter Issue-Index wird beim Lesen
+//   angeglichen. Vorher stand der Rohwert in der Spalte, im KW-Modus "KW NaN".
+//   Flow-KW nutzt jetzt isoWeek(): die eigene Formel lag an rund jedem dritten
+//   Tag eine Woche daneben (13.11.2026 zeigte KW 45 statt KW 46).
+// v2.96.4: Sortierungen geprueft.
+//   Flow-Tabelle: sortierte nach a[Spaltenschluessel] -- 9 von 13 Schluesseln
+//   (Status, Fehlt, BC, FC, Pred. Delivery, Rest, Gesamt, Entw., Fortschritt)
+//   gibt es am Issue nicht, der Klick zeigte nur den Pfeil. Jetzt eine
+//   Wertfunktion je Spalte (flowSortValue), Zahlen numerisch, Leerwerte immer
+//   ans Ende, dritter Klick = Ausgangsreihenfolge (wie Termin-Radar).
+//   Termin-Radar: Knopf \"zurueck zur Standardsortierung\" rief bcSortClick
+//   zweimal mit demselben alten Zustand auf -- bei aufsteigender Sortierung
+//   kippte er nur auf absteigend. Jetzt eigener Ruecksetzer.
+//   Rohdaten: Zahlen sortierten als Text (8 hinter 120), Leerwerte standen
+//   aufsteigend vorn; Zahl als Zellwert liess die Ansicht abstuerzen.
 
 // v2.96.0: Flow -- Issues an einem PVER (Typ des gemappten Release) erscheinen
 //          nicht als Issue-Zeile, sondern mit je einer Zeile pro Workitem
@@ -4353,7 +4372,7 @@ function normalizeToClearQuestTable(rawRows){
   return rawRows.map(function(row){
     var n={};
     CQ_MAPPING.forEach(function(m){n[m.field]=_get(row,m.src,m.ci);});
-    ["wi_start","wi_end","bc_deadline","fc_deadline"].forEach(function(f){if(n[f])n[f]=_pd(n[f])||n[f];});
+    ["wi_start","wi_end","bc_deadline","fc_deadline","bc_committed"].forEach(function(f){if(n[f])n[f]=_pd(n[f])||n[f];}); // v2.96.5: bc_committed
     if(n.wi_assignee){if(!n.wi_abteilung)n.wi_abteilung=_cd(n.wi_assignee);n.wi_assignee=_cn(n.wi_assignee);}
     // Aufwand: R_Eff → EstimationEffort → 8h  (identisch zu parseClearQuest)
     var xml=n._tags_xml||"";
@@ -4395,7 +4414,16 @@ function RohdatenView(props){
   var filtered=useMemo(function(){
     if(!data||!data.length)return[];
     var rows=q?data.filter(function(r){return ALL.some(function(f){return String(r[f]||"").toLowerCase().includes(q.toLowerCase());});}):data;
-    return rows.slice().sort(function(a,b){var av=String(a[sc]||""),bv=String(b[sc]||"");return asc?av.localeCompare(bv,"de"):bv.localeCompare(av,"de");});
+    // v2.96.4: Zahlen als Zahl (8 vor 120, 56.25 vor 56.5), sonst natuerlich
+    // (WI-9 vor WI-10); Leerwerte in beiden Richtungen hinten.
+    var NUM=/^-?\d+(?:[.,]\d+)?$/;
+    return rows.slice().sort(function(a,b){
+      var av=String(a[sc]==null?"":a[sc]).trim(),bv=String(b[sc]==null?"":b[sc]).trim();
+      if(!av||!bv)return !av&&!bv?0:(!av?1:-1);
+      var c=(NUM.test(av)&&NUM.test(bv))?parseFloat(av.replace(",","."))-parseFloat(bv.replace(",","."))
+        :av.localeCompare(bv,"de",{numeric:true,sensitivity:"base"});
+      return asc?c:-c;
+    });
   },[data,q,sc,asc]);
 
   var pages=Math.max(1,Math.ceil(filtered.length/PAGE));
@@ -4412,7 +4440,7 @@ function RohdatenView(props){
   var TH={padding:"7px 10px",fontSize:"var(--fs-xs)",fontWeight:800,borderBottom:"2px solid "+Ac.border,whiteSpace:"nowrap",cursor:"pointer",background:Ac.surface,position:"sticky",top:0,zIndex:2,textTransform:"uppercase",letterSpacing:"0.5px",userSelect:"none"};
   var TD={padding:"5px 10px",fontSize:"var(--fs-sm)",borderBottom:"1px solid "+alpha(Ac.border,"55"),whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:200,verticalAlign:"top"};
 
-  function sClr(f,v){var l=(v||"").toLowerCase();if(f=="wi_status"||f=="iss_status"){if(l=="closed"||l=="canceled")return Ac.textLight;if(l=="started")return Ac.mint;if(l=="conflicted")return Ac.coral;}return Ac.text;}
+  function sClr(f,v){var l=String(v||"").toLowerCase();if(f=="wi_status"||f=="iss_status"){if(l=="closed"||l=="canceled")return Ac.textLight;if(l=="started")return Ac.mint;if(l=="conflicted")return Ac.coral;}return Ac.text;}
 
   return React.createElement("div",{style:{display:"flex",flexDirection:"column",height:"100%",overflow:"hidden",background:Ac.bg}},
     React.createElement("div",{style:{padding:"10px 20px",borderBottom:"1px solid "+Ac.border,background:Ac.surface,flexShrink:0,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}},
@@ -5889,6 +5917,13 @@ function Planungstool(){
     else if(bcSort.dir>0)n={key:key,dir:-1};
     else n={key:null,dir:1};
     n=normalizeBcSort(n);
+    try{localStorage.setItem("ptool_bc_sort",JSON.stringify(n));}catch(e){}
+    setBcSortRaw(n);
+  }
+  // v2.96.4: Zuruecksetzen direkt. Zwei bcSortClick hintereinander sahen
+  // beide denselben alten Zustand -- aus "aufsteigend" wurde nur "absteigend".
+  function bcSortReset(){
+    var n={key:null,dir:1};
     try{localStorage.setItem("ptool_bc_sort",JSON.stringify(n));}catch(e){}
     setBcSortRaw(n);
   }
@@ -12576,7 +12611,7 @@ function Planungstool(){
 
         // Aktive Sortierung sichtbar machen + schnell zuruecksetzen
         bcSort.key&&React.createElement("button",{
-          onClick:function(){bcSortClick(bcSort.key);bcSortClick(bcSort.key);},
+          onClick:function(){bcSortReset();},
           title:"Zur\u00fcck zur Standardsortierung (gr\u00f6\u00dfter Verzug oben)",
           style:{padding:"4px 10px",borderRadius:"var(--r-sm)",cursor:"pointer",fontSize:"var(--fs-sm)",fontWeight:700,
             border:"1px solid "+A.mint,background:A.mintLight,color:A.mint}},
@@ -12894,8 +12929,18 @@ function Planungstool(){
     var s_af=useState("all");         var ampelF=s_af[0],setAmpelF=s_af[1];
     var s_coll=useState({});          var coll=s_coll[0],setColl=s_coll[1];
     var s_exp=useState({});           var exp=s_exp[0],setExp=s_exp[1];
-    var s_sc=useState(null);          var sortC=s_sc[0],setSortC=s_sc[1];
-    var s_sd=useState(1);             var sortD=s_sd[0],setSortD=s_sd[1];
+    // v2.96.5: Sortierung wird gemerkt (ptool_flow_sort = {key,dir}).
+    var s_fs=useState(function(){
+      try{var v=JSON.parse(localStorage.getItem("ptool_flow_sort")||"null");
+        if(v&&FLOW_COL_BY_KEY[v.key])return {key:v.key,dir:Number(v.dir)<0?-1:1};}catch(e){}
+      return {key:null,dir:1};
+    });
+    var sortC=s_fs[0].key,sortD=s_fs[0].dir;
+    function setFlowSort(key,dir){
+      var n={key:key,dir:dir};
+      try{localStorage.setItem("ptool_flow_sort",JSON.stringify(n));}catch(e){} // sofort, nicht im Updater
+      s_fs[1](n);
+    }
     var s_kw=useState(false);         var kwMode=s_kw[0],setKwMode=s_kw[1];
     // v2.44.0: hidCols wanderte nach Planungstool (flowCols.hidden), damit die
     // Konfiguration Re-Renders ueberlebt und persistiert werden kann.
@@ -12929,11 +12974,12 @@ function Planungstool(){
       return "in "+Math.ceil(diff/30)+"Mo";
     }
     function kw(ds){
+      // v2.96.5: gemeinsame ISO-Woche (Donnerstag-Regel). Die eigene Formel lag
+      // an rund jedem dritten Tag eine Woche daneben (13.11.2026 -> KW 45 statt 46).
       if(!ds)return "";
-      var d=new Date(ds);
-      var jan4=new Date(d.getFullYear(),0,4);
-      var wk=Math.ceil(((d-jan4)/864e5+jan4.getDay()+1)/7);
-      return "KW "+wk;
+      var d=localDay(ds);
+      if(isNaN(d.getTime()))return String(ds);
+      return "KW "+isoWeek(d);
     }
     function fd(ds){if(!ds)return "–";return kwMode?kw(ds):ds;}
     // v2.93.1: Anteil eines Mitarbeiters am Restaufwand und die Aufteilung als Text
@@ -12960,7 +13006,7 @@ function Planungstool(){
         // v2.95.0: known=false, wenn der Index aus einer Version ohne Tags stammt
         (x.fcs||[]).forEach(function(f){fm[f.id||f.name]={name:f.name,id:f.id||"",fcTags:f.tags||"",fcExtDesc:f.desc||"",known:f.tags!==undefined};});
         issMap[id]={id:id,title:x.t||id,lcs:x.l||"",bcName:x.bc||"",bcId:x.bcId||"",
-          bcPlan:x.bcPlan||"",committed:x.com||"",bcWunsch:flowWunsch[id]||"",fcMap:fm,wiIds:(x.wis||[]).slice(),
+          bcPlan:x.bcPlan||"",committed:flowSortDate(x.com)||"",bcWunsch:flowWunsch[id]||"",fcMap:fm,wiIds:(x.wis||[]).slice(),
           pver:!!pverWhy(x),pvName:x.pv||""};
       });
       // 2. Pro Issue: Werte aus allPkgs aggregieren
@@ -13869,11 +13915,51 @@ function Planungstool(){
     }
 
     // ── Sortierung pro Lane ───────────────────────────────────────────
+    // v2.96.4: Je Spalte der Wert, der auch angezeigt wird. Vorher wurde
+    // a[Spaltenschluessel] verglichen -- den gibt es fuer die meisten Spalten
+    // am Issue nicht (predDel/rest/gesamt/... heissen dort anders).
+    var FLOW_AMPEL_RANG={red:0,clock:1,amber:2,grey:3,green:4}; // wie Kartenbrett
+    function flowSortDate(v){
+      if(!v)return null;
+      var t=String(v).trim(),m=t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})/);
+      if(m){var y=m[3].length===2?"20"+m[3]:m[3];return y+"-"+("0"+m[2]).slice(-2)+"-"+("0"+m[1]).slice(-2);}
+      if(/^\d{4}-\d{2}-\d{2}/.test(t))return t.slice(0,10);
+      return t;
+    }
+    function flowSortValue(key,iss){
+      switch(key){
+        case "ampel":    return FLOW_AMPEL_RANG[iss.ampel]!=null?FLOW_AMPEL_RANG[iss.ampel]:9;
+        // Fehlt: schwerster Hinweis zuerst, bei Gleichstand der mit mehr Hinweisen
+        case "fehlt":    {var f=iss.fehlt||[];if(!f.length)return null;
+                          var mx=f.reduce(function(m,x){return Math.max(m,x.sev||0);},0);
+                          return (4-mx)*100-f.length;}
+        case "bc":       return iss.bcName||"";
+        case "fc":       return (iss.fcList||[]).map(function(x){return x.name;}).join("; ");
+        case "predStart":return flowSortDate(iss.predStart);
+        case "predDel":  return flowSortDate(iss.predDelivery);
+        case "bcWunsch": return flowSortDate(iss.bcWunsch);
+        case "bcPlan":   return flowSortDate(iss.bcPlan);
+        case "committed":return flowSortDate(iss.committed);
+        case "rest":     return iss.remainingHours;
+        case "gesamt":   return iss.totalHours;
+        case "entw":     return (iss.developers||[]).length||null;
+        case "progress": return iss.totalHours>0?Math.max(0,Math.min(100,Math.round((1-iss.remainingHours/iss.totalHours)*100))):null;
+        default:         return null;
+      }
+    }
     function sortedItems(items){
       if(!sortC)return items;
+      // v2.96.5: ausgeblendete Spalte -> Ausgangsreihenfolge (kein unsichtbarer Pfeil)
+      if(!visCols.some(function(c){return c.key===sortC;}))return items;
+      var leer=function(v){return v===null||v===undefined||v==="";};
       return items.slice().sort(function(a,b){
-        var va=a[sortC]||"",vb=b[sortC]||"";
-        return sortD*(va>vb?1:va<vb?-1:0);
+        var va=flowSortValue(sortC,a),vb=flowSortValue(sortC,b);
+        var ea=leer(va),eb=leer(vb);
+        if(ea||eb)return ea&&eb?0:(ea?1:-1); // Leerwerte immer ans Ende
+        var c=(typeof va==="number"&&typeof vb==="number")?va-vb
+          :String(va).localeCompare(String(vb),"de",{numeric:true,sensitivity:"base"});
+        if(c)return c*sortD;
+        return String(a.title||"").localeCompare(String(b.title||""),"de",{numeric:true});
       });
     }
 
@@ -14099,9 +14185,12 @@ function Planungstool(){
                 var isSrt=sortC===col.key;
                 return React.createElement("th",{key:col.key,
                   onClick:function(){
-                    if(sortC===col.key)setSortD(function(d){return -d;});
-                    else{setSortC(col.key);setSortD(1);}
+                    // v2.96.4: 1. Klick auf-, 2. absteigend, 3. zurueck (wie Termin-Radar)
+                    if(sortC!==col.key)setFlowSort(col.key,1);
+                    else if(sortD>0)setFlowSort(col.key,-1);
+                    else setFlowSort(null,1);
                   },
+                  title:"Sortieren nach "+col.label+" \u00b7 dritter Klick = Ausgangsreihenfolge",
                   style:{
                     padding:"10px 10px",textAlign:"left",fontWeight:700,fontSize:"var(--fs-sm)",
                     color:isSrt?A.mint:A.textMid,cursor:"pointer",
