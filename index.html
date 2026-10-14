@@ -2545,7 +2545,12 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="2.96.5";
+var APP_VERSION="2.97.0";
+// v2.97.0: Umplanung nennt den Grund (Entscheidung Maik: automatisch, kein
+//   Freitext). runAnalysis legt je Workitem r.grund an -- Auslastung (Spitze,
+//   Tag, gleichzeitige WIs), Vorgaenger, zu wenig Kapazitaet bis Planende,
+//   Vorrang anderer WIs mit frueherem BC-Ziel. Anzeige auf der Karte, Excel-
+//   Spalte \"Grund\". Fremde Namen erscheinen nie, nur Kennung und Titel.
 // v2.96.5: Flow-Sortierung ueberlebt den Neustart (ptool_flow_sort, Ansichts-
 //   einstellung wie ptool_bc_sort, daher nicht im Lizenztor). Ist die sortierte
 //   Spalte ausgeblendet, gilt die Ausgangsreihenfolge.
@@ -4013,6 +4018,7 @@ function runAnalysis(releases,employees,absences,absMapIn){
   // ════════════════════════════════════════════════════════════════
   var computedCapEnd={},done={},resultMap={};
   var cal={}; // empId -> {Datum: belegte Stunden}
+  var calWer={}; // v2.97.0: empId -> {Datum: [WI-IDs]} -- wer den Tag belegt
   function prioCmp(a,b){
     var ga=countsForEffort(a)?0:1,gb=countsForEffort(b)?0:1;
     if(ga!==gb)return ga-gb;
@@ -4025,7 +4031,7 @@ function runAnalysis(releases,employees,absences,absMapIn){
   }
   // Bucht rem Stunden ab from; commit=false rechnet nur (fuer nicht
   // freigegebene WIs). Rueckgabe: erster und letzter Tag mit Stunden.
-  function book(c,from,rem,hpd,empAbs,commit){
+  function book(c,from,rem,hpd,empAbs,commit,wer,wid){
     if(!(rem>0)||!(hpd>0))return {start:from,end:from};
     var d=localDay(from),left=rem,first="",last=from,g=0;
     while(left>1e-9&&g++<5000){
@@ -4035,7 +4041,7 @@ function runAnalysis(releases,employees,absences,absMapIn){
           var free=hpd-(c[k]||0);
           if(free>1e-9){
             var u=Math.min(free,left);
-            if(commit)c[k]=(c[k]||0)+u;
+            if(commit){c[k]=(c[k]||0)+u;if(wer)(wer[k]||(wer[k]=[])).push(wid);}
             left-=u;if(!first)first=k;last=k;
           }
         }
@@ -4074,7 +4080,18 @@ function runAnalysis(releases,employees,absences,absMapIn){
     var depConstrainedStart=depMaxEnd?nextWorkday(depMaxEnd):"";
     var effectiveStart=depConstrainedStart>planStart?depConstrainedStart:planStart;
     var c=emp?(cal[emp.id]||(cal[emp.id]={})):{}; // ohne Mitarbeiter: eigener Kalender
-    var bk=book(c,effectiveStart,rem,hpd,empAbs,countsForEffort(pkg));
+    // v2.97.0: vor dem Buchen messen, was bis zum Planende moeglich waere
+    var wer=emp?(calWer[emp.id]||(calWer[emp.id]={})):null;
+    var fen={ideal:0,frei:0,at:0,abw:0,vorher:{}};
+    if(pkg.end&&effectiveStart<=pkg.end){
+      getDays(effectiveStart,pkg.end).forEach(function(d){
+        if(isWE(d))return;var k=dateStr(d);
+        if(empAbs[k]){fen.abw++;return;}
+        fen.at++;fen.ideal+=hpd;fen.frei+=Math.max(0,hpd-(c[k]||0));
+        ((wer&&wer[k])||[]).forEach(function(w){fen.vorher[w]=true;});
+      });
+    }
+    var bk=book(c,effectiveStart,rem,hpd,empAbs,countsForEffort(pkg),wer,pkgId);
     var capEnd=bk.end,computedEnd=bk.end;
     computedCapEnd[pkgId]=capEnd;done[pkgId]=true;
     var pkgDays=getDays(pkg.start,pkg.end).filter(function(d){return !isWE(d)&&!empAbs[dateStr(d)];});
@@ -4083,9 +4100,44 @@ function runAnalysis(releases,employees,absences,absMapIn){
     var maxLoad=0;pkgDays.forEach(function(d){var l=(loadMap[pkg.employee]||{})[dateStr(d)]||0;if(l>maxLoad)maxLoad=l;});
     // v2.92.2: Prognose hinter dem Planende = mindestens PUFFER.
     var endShifted=capEnd<pkg.end,endDelayed=capEnd>pkg.end;
+    // ── v2.97.0: Grund fuer UMPLANEN / PUFFER ─────────────────────
+    var grund=[],r1=function(x){return Math.round(x*10)/10;};
+    var spitzeTag="",spitze=0;
+    pkgDays.forEach(function(d){var k=dateStr(d),l=(loadMap[pkg.employee]||{})[k]||0;if(l>spitze){spitze=l;spitzeTag=k;}});
+    var gleichzeitig=spitzeTag?allPkgs.filter(function(o){
+      return o.id!==pkg.id&&o.employee&&o.employee===pkg.employee&&o.lcs!=="closed"&&o.start<=spitzeTag&&o.end>=spitzeTag;
+    }).map(function(o){return o.id;}):[];
+    if(hardDays.length||softDays.length){
+      var hart=hardDays.length>0;
+      grund.push({k:"last",sev:hart?3:2,
+        t:hart?(hardDays.length+" AT \u00fcber 100 % ausgelastet"):(softDays.length+" AT \u00fcber "+Math.round(TARGET_UTIL*100)+" % ausgelastet"),
+        d:"Spitze "+Math.round(spitze/cap*100)+" % am "+spitzeTag+" ("+r1(spitze)+" h bei "+r1(cap)+" h/Tag)"+(gleichzeitig.length?" \u2014 gleichzeitig geplant:":""),
+        ids:gleichzeitig});
+    }
+    if(endDelayed){
+      var spaet=workdaysBetween2(pkg.end,capEnd);
+      var planAb=pkg.start>today?pkg.start:today;
+      if(depConstrainedStart&&depConstrainedStart>planAb){
+        var vg=(pkg.dependencies||[]).filter(function(x){return computedCapEnd[x];})
+          .sort(function(a,b){return computedCapEnd[a]<computedCapEnd[b]?1:-1;})[0];
+        grund.push({k:"vorg",sev:2,t:"Wartet auf Vorg\u00e4nger",
+          d:"Prognose des Vorg\u00e4ngers endet "+computedCapEnd[vg]+", Start daher fr\u00fchestens "+depConstrainedStart,ids:vg?[vg]:[]});
+      }
+      if(!(pkg.end&&effectiveStart<=pkg.end)){
+        grund.push({k:"kap",sev:2,t:"Kein Platz mehr bis Planende",d:"Fr\u00fchester Start "+effectiveStart+" liegt nach dem Planende "+pkg.end,ids:[]});
+      }else if(rem>fen.ideal+1e-9){
+        grund.push({k:"kap",sev:2,t:"Restaufwand passt nicht bis Planende",
+          d:r1(rem)+" h Rest, bis "+pkg.end+" nur "+fen.at+" AT \u00d7 "+r1(hpd)+" h = "+r1(fen.ideal)+" h"+(fen.abw?" ("+fen.abw+" AT abwesend)":""),ids:[]});
+      }else if(rem>fen.frei+1e-9){
+        grund.push({k:"vorrang",sev:2,t:"Andere Workitems werden vorher eingeplant",
+          d:"Bis "+pkg.end+" sind nur "+r1(fen.frei)+" von "+r1(fen.ideal)+" h frei (fr\u00fcheres BC-Ziel zuerst) \u2014 belegt durch:",
+          ids:Object.keys(fen.vorher)});
+      }
+      grund.push({k:"folge",sev:hardDays.length?3:2,t:"Prognose "+spaet+" AT nach Planende",d:"Planende "+pkg.end+", Prognose "+capEnd,ids:[]});
+    }
     var indirectlyAffected=allPkgs.filter(function(other){return (other.dependencies||[]).indexOf(pkg.id)>=0&&capEnd>=other.start;}).map(function(o){return o.id;});
     resultMap[pkgId]={pkg:pkg,emp:emp,rem:rem,planStart:bk.start,computedEnd:computedEnd,capEnd:capEnd,endShifted:endShifted,endDelayed:endDelayed,daysGained:endShifted?workdaysBetween2(capEnd,pkg.end):0,daysLost:endDelayed?workdaysBetween2(pkg.end,capEnd):0,hardDays:hardDays.length,softDays:softDays.length,maxUtil:Math.round((maxLoad/cap)*100),depConstrainedStart:depConstrainedStart,indirectlyAffected:indirectlyAffected,status:hardDays.length>0?"replan":(softDays.length>0||endDelayed)?"puffer":"ok",
-      reserves:countsForEffort(pkg)};
+      reserves:countsForEffort(pkg),grund:grund};
   }
   return allPkgs.filter(function(p){return p.lcs!=="closed";}).map(function(p){return resultMap[p.id];}).filter(Boolean);
 }
@@ -10381,14 +10433,20 @@ function Planungstool(){
                       // v2.95.2: Titel nutzt die Kartenbreite (bis zwei Zeilen, dann
                       // Auslassung) statt fest nach 35 Zeichen abgeschnitten zu werden;
                       // der volle Titel steht im Tooltip. Klick oeffnet das Workitem.
-                      return React.createElement("div",{key:i,"data-umpl-card":pkg.id||"",title:title,
+                      // v2.97.0: Kurzgrund (nur UMPLANEN/PUFFER); Einzelheiten im Tooltip und in der Liste
+                      var gr=(cat.key==="replan"||cat.key==="puffer")?(item.grund||[]):[];
+                      var grKurz=gr.filter(function(x){return x.k!=="folge";}).map(function(x){return x.t;}).join(" \u00b7 ");
+                      var grLang=gr.map(function(x){return "\u2022 "+x.t+(x.d?" \u2014 "+x.d:"")+(x.ids&&x.ids.length?" "+x.ids.join(", "):"");}).join("\n");
+                      return React.createElement("div",{key:i,"data-umpl-card":pkg.id||"",title:title+(grLang?"\n\nGrund:\n"+grLang:""),
                         onClick:function(){if(item.pkg||pkg.id){setEditPkg(pkg);setModal("editPkg");}},
                         style:{fontSize:"var(--fs-xs)",borderRadius:"var(--r-sm)",background:"rgb(var(--c-surface-rgb) / 0.6)",padding:"3px 6px",cursor:"pointer",minWidth:0}},
                         id&&React.createElement(CopyID,{id:id,label:id,style:{fontSize:"var(--fs-2xs)"}}),
                         React.createElement("div",{"data-umpl-title":"1",style:{color:A.text,marginTop:1,fontSize:"var(--fs-xs)",lineHeight:1.35,
                           overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",wordBreak:"break-word"}},
                           title||""),
-                        shift&&React.createElement("div",{style:{color:cat.color,fontSize:"var(--fs-2xs)",fontWeight:700}},shift)
+                        shift&&React.createElement("div",{style:{color:cat.color,fontSize:"var(--fs-2xs)",fontWeight:700}},shift),
+                        grKurz&&React.createElement("div",{"data-grund-kurz":pkg.id||"",style:{color:A.textMid,fontSize:"var(--fs-2xs)",lineHeight:1.3,marginTop:1,
+                          overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}},grKurz)
                       );
                     }),
                     catItems.length>5&&React.createElement("button",{
@@ -14376,6 +14434,7 @@ function Planungstool(){
           "Neues Ende (capEnd)":  r.capEnd||r.pkg.end,
           "Verschiebung (AT)":  r.endShifted?-r.daysGained:r.endDelayed?r.daysLost:0,
           "Status":               statusLabel(r.status),
+          "Grund":                (r.status==="ok"?[]:(r.grund||[])).map(function(g){return g.t+(g.d?" ("+g.d+(g.ids&&g.ids.length?" "+g.ids.join(", "):"")+")":"");}).join("; "), // v2.97.0
           "Max Auslastung (%)":   r.maxUtil,
           "FC-Deadline":          fcDue,
           "FC-Status":            fcDue?dlLabel(deadlineStatus(r.pkg.end,fcDue)):"",
@@ -14499,6 +14558,7 @@ function Planungstool(){
           var empColor=r.emp?getEmpColor(r.emp,employees.findIndex(function(e){return e.id===r.emp.id;})):A.textLight;
           var fcSt=deadlineStatus(r.pkg.end,r.pkg.fcDueDate);
           var bcSt=deadlineStatus(r.pkg.end,r.pkg.bcDueDate);
+          var grund=(isReplan||isPuffer)?(r.grund||[]):[];
           return React.createElement("div",{key:r.pkg.id,style:{background:A.surface,borderRadius:"var(--r-xl)",border:"1px solid "+alpha((hasIndirect?A.violet:statusColor),"55"),overflow:"hidden"}},
             React.createElement("div",{style:{background:hasIndirect?A.violetLight:alpha(statusColor,"18"),padding:"10px 16px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}},
               React.createElement("div",{style:{padding:"3px 10px",borderRadius:"var(--r-pill)",background:statusColor,fontSize:"var(--fs-xs)",fontWeight:800,color:"var(--c-on-accent)"}},isReplan?"UMPLANEN":isPuffer?"PUFFER OK":"OK"),
@@ -14513,6 +14573,21 @@ function Planungstool(){
                 React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textMid,marginTop:2}},r.pkg.rn," · ",r.pkg.cn)
               ),
               React.createElement("div",{style:{padding:"3px 10px",borderRadius:"var(--r-md)",background:r.maxUtil>100?A.coralLight:r.maxUtil>80?A.amberLight:A.greenLight,fontSize:"var(--fs-base)",fontWeight:800,color:r.maxUtil>100?A.coral:r.maxUtil>80?A.amber:A.green}},r.maxUtil,"%")
+            ),
+            // v2.97.0: Warum umplanen / warum Puffer
+            grund.length>0&&React.createElement("div",{"data-grund":r.pkg.id,style:{padding:"10px 16px 0",display:"flex",flexDirection:"column",gap:4}},
+              React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,fontWeight:700,textTransform:"uppercase",letterSpacing:0.5}},"Grund"),
+              grund.map(function(g,gi){
+                return React.createElement("div",{key:gi,"data-grund-k":g.k,style:{fontSize:"var(--fs-sm)",color:A.text,lineHeight:1.45}},
+                  React.createElement("span",{style:{fontWeight:700,color:g.sev>=3?A.coral:A.amber}},"\u25cf "),
+                  React.createElement("b",null,g.t),
+                  g.d?React.createElement("span",{style:{color:A.textMid}}," \u00b7 "+g.d):null,
+                  (g.ids||[]).length?React.createElement("span",{style:{color:A.textMid}}," ",
+                    g.ids.map(function(id,ii){var p=pkgById[id];
+                      return React.createElement("span",{key:id,style:{display:"inline-block",marginRight:6}},
+                        React.createElement(CopyID,{id:id,label:id,style:{fontSize:"var(--fs-2xs)"}}),
+                        p&&p.title?" "+p.title:"");})):null);
+              })
             ),
             React.createElement("div",{style:{padding:"14px 16px"}},
               React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:14}},
