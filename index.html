@@ -1223,6 +1223,11 @@ WBTor({
   "eigen": [
     "ptool_rawdata",
     "ptool_issues",
+    "ptool_flow_blockers",
+    "ptool_flow_prio",
+    "ptool_flow_lanes",
+    "ptool_flow_wip",
+    "ptool_flow_wunsch",
     "ptool_employees",
     "ptool_releases",
     "ptool_absences",
@@ -1937,6 +1942,7 @@ function getAvatarColor(i){ return AVATAR_COLORS[i%AVATAR_COLORS.length]; }
 // werden im Planungstool-State gehalten und persistiert (ptool_flow_cols).
 var FLOW_COL_DEFS=[
   {key:"ampel",    label:"Status",        w:72},
+  {key:"fehlt",    label:"Fehlt",         w:260}, // v2.95.0
   {key:"bc",       label:"BC",            w:180},
   {key:"fc",       label:"FC(s)",         w:180},
   {key:"predStart",label:"Pred. Start",   w:110},
@@ -2240,6 +2246,8 @@ function normalizeFlowCols(v){
   if(v&&Object.prototype.toString.call(v.order)==="[object Array]"){
     v.order.forEach(function(k){if(FLOW_COL_BY_KEY[k]&&order.indexOf(k)<0)order.push(k);});
   }
+  // v2.95.0: "Fehlt" gehoert neben den Status, nicht ans Ende gespeicherter Reihenfolgen.
+  if(order.length&&order.indexOf("fehlt")<0){var ai=order.indexOf("ampel");order.splice(ai<0?0:ai+1,0,"fehlt");}
   FLOW_COL_DEFS.forEach(function(c){if(order.indexOf(c.key)<0)order.push(c.key);});
   FLOW_COL_DEFS.forEach(function(c){
     var pw=(v&&v.w)?Number(v.w[c.key]):NaN;
@@ -2537,7 +2545,51 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="2.94.0";
+var APP_VERSION="2.96.3";
+
+// v2.96.0: Flow -- Issues an einem PVER (Typ des gemappten Release) erscheinen
+//          nicht als Issue-Zeile, sondern mit je einer Zeile pro Workitem
+//          (\u2699). Ebene nach WI-Status, Ampel und \"Fehlt\" gegen das
+//          geplante Ende des Workitems. Der Issue-Index traegt dafuer pver/pv
+//          (und den Issue-Typ); aeltere Staende brauchen einen neuen Import.
+
+// v2.95.2: Umplanung (Karten): Titel wurden fest nach 35 Zeichen abgeschnitten,
+//          egal wie breit die Karte war. Jetzt bis zwei Zeilen ueber die volle
+//          Breite, dann Auslassung; voller Titel im Tooltip. Ein Klick auf die
+//          Karte oeffnet das Workitem (wie in der Liste ueber \"Bearbeiten\").
+//          Flow-Blocker-Dialog: Titel fehlte ganz (las name statt title) und war
+//          auf 30 Zeichen gekuerzt.
+
+// v2.95.1: Flow -- Ablieferwunsch des Auftraggebers je Issue in der Spalte
+//          \"BC Wunsch\" (Datumsfeld in der Zeile, ptool_flow_wunsch). Liegt die
+//          Prognose dahinter, meldet \"Fehlt\" \"Wunsch +n AT\" (gelb).
+//          Dabei behoben: Blocker, Prioritaeten, Ebenen von Hand und
+//          WIP-Limits wurden nie gespeichert und waren nach jedem Neuladen
+//          weg. Ebenen von Hand setzt nur noch ein neuer Import zurueck.
+
+// v2.95.0: Flow als schnelle Statusuebersicht.
+//          1. Kompakte Zeilen (Voreinstellung, Umschalter \"Kompakt/Ausfuehrlich\",
+//             ptool_flow_compact): eine Zeile je Issue -- Titel mit Kennung,
+//             Prognose und BC-Ziel ohne zweite Zeile; Details im Tooltip.
+//          2. Neue Spalte \"Fehlt\" neben dem Status: was fehlt, damit der
+//             Issue seinen BC-Termin schafft -- Verzug/knapper Puffer, Start
+//             ueberfaellig, ohne Workitem/Mitarbeiter/Start, FC-Angaben
+//             unvollstaendig. Auch im Excel-Export.
+//          3. FC-Pruefung: Tags und Beschreibung kamen nie im Flow an (jede FC
+//             zeigte \u274c). Der Issue-Index traegt sie jetzt.
+//          4. Excel-Export: Spalte \"BC Plan\" war immer leer.
+
+// v2.94.1: Flow -- die Breite der Spalte \"Bezeichnung\" ging verloren, sobald
+//          man eine andere Spalte zog, eintippte, verschob oder ausblendete.
+//          Vier Setter bauten die Einstellung aus order/w/hidden neu und
+//          liessen labelW weg. Alle Setter (Flow und Termin-Radar) uebernehmen
+//          jetzt den bisherigen Stand und ersetzen nur ihr Feld.
+//          Lehre: Wer einem Objekt ein Feld hinzufuegt, muss jede Stelle
+//          finden, die es neu zusammenbaut -- Object.assign statt Literal.
+//          Zweite Haelfte desselben Befunds: Nach EINER Aenderung schloss sich
+//          das Spalten-Menue, und die Suche war leer -- Flow wurde bei jedem
+//          Rendern neu aufgebaut. 18 Ansichten laufen jetzt ueber ViewHost und
+//          behalten ihren Zustand.
 
 // v2.94.0: Prognose nacheinander je Mitarbeiter (Entscheidung Maik).
 //          Bisher rechnete jedes Workitem, als haette es den Mitarbeiter fuer
@@ -4208,19 +4260,20 @@ var CQ_MAPPING=[
   {field:"wi_rem_h",     label:"Restaufwand (h)",     src:[]},
   {field:"iss_id",       label:"Issue-ID",            src:["ID Issue","Id Issue","Id"]},
   {field:"iss_status",   label:"Issue-Status",        src:["LCS Issue","lcs Issue"]},
-  {field:"iss_typ",      label:"Issue-Typ",           src:["Type Issue"]},
+  {field:"iss_typ",      label:"Issue-Typ",           src:["Type Issue","Issue Type","Typ Issue","Type"],ci:true},
   {field:"iss_titel",    label:"Issue-Titel",         src:["Titel Issue"]},
   {field:"iss_assignee", label:"Issue-Zuständig",     src:["Assignee Issue"]},
   {field:"bc_id",        label:"BC-ID",               src:["hasMappedReleases.hasMappedRelease.id","hasMappedReleases.hasMappedRelease.Id"]},
   {field:"bc_name",      label:"BC-Name",             src:["hasMappedReleases.hasMappedRelease.Title"]},
   {field:"bc_deadline",  label:"BC-Deadline",         src:["hasMappedReleases.hasMappedRelease.PlannedDate"]},
   {field:"bc_committed", label:"BC-Committed",        src:["hasMappedReleases.hasMappedRelease.ImplementationFreeze"]},
-  {field:"bc_typ",       label:"BC-Typ",              src:["hasMappedReleases.hasMappedRelease.Type"]},
+  {field:"bc_typ",       label:"BC-Typ",              src:["hasMappedReleases.hasMappedRelease.Type"],ci:true},
   {field:"bc_lcs",       label:"BC-Status",           src:["hasMappedReleases.LifeCycleState"]},
   {field:"fc_id",        label:"FC-ID",               src:["hasMappedReleases.hasMappedRelease.hasMappedChildren.hasMappedChildRelease.id","hasMappedReleases.hasMappedRelease.hasMappedChildren.hasMappedChildRelease.Id"]},
   {field:"fc_name",      label:"FC-Name",             src:["hasMappedReleases.hasMappedRelease.hasMappedChildren.hasMappedChildRelease.Title"]},
   {field:"fc_deadline",  label:"FC-Deadline",         src:["hasMappedReleases.hasMappedRelease.hasMappedChildren.hasMappedChildRelease.PlannedDate"]},
   {field:"fc_tags",      label:"FC-Tags (XML)",       src:["hasMappedReleases.hasMappedRelease.hasMappedChildren.hasMappedChildRelease.Tags"]},
+  {field:"fc_typ",       label:"FC-Typ",              src:["hasMappedReleases.hasMappedRelease.hasMappedChildren.hasMappedChildRelease.Type"],ci:true},
   {field:"fc_ext_desc",  label:"FC-Beschreibung",     src:["hasMappedReleases.hasMappedRelease.hasMappedChildren.hasMappedChildRelease.ExternalDescription"]},
   {field:"rel_name",     label:"Release-Name",        src:["Release-Name","Release"]},
   {field:"komp_name",    label:"Komponenten-Name",    src:["Komponenten-Name","Komponente"]},
@@ -4242,24 +4295,51 @@ function buildIssueIndex(rows){
     if(!id)return;
     var x=m[id];
     if(!x)x=m[id]={t:row.iss_titel||id,l:String(row.iss_status||"").toLowerCase(),
-      bc:row.bc_name||"",bcId:row.bc_id||"",bcPlan:row.bc_deadline||"",com:row.bc_committed||"",fcs:[],wis:[]};
+      bc:row.bc_name||"",bcId:row.bc_id||"",bcPlan:row.bc_deadline||"",com:row.bc_committed||"",fcs:[],wis:[],rt:[]};
+    if(!x.rt)x.rt=[];
     if(row.fc_name){
       var k=row.fc_id||row.fc_name;
-      if(!x.fcs.some(function(f){return (f.id||f.name)===k;}))x.fcs.push({name:row.fc_name,id:row.fc_id||""});
+      var fx=null;x.fcs.forEach(function(f){if((f.id||f.name)===k)fx=f;});
+      // v2.95.0: Tags und Beschreibung fuer die FC-Pruefung. Fehlten bisher --
+      // Flow zeigte deshalb an jeder FC \u274c, auch wenn alles gepflegt war.
+      if(!fx){fx={name:row.fc_name,id:row.fc_id||"",tags:"",desc:""};x.fcs.push(fx);}
+      if(row.fc_tags&&!fx.tags)fx.tags=String(row.fc_tags);
+      if(row.fc_ext_desc&&!fx.desc)fx.desc=String(row.fc_ext_desc);
     }
+    // v2.96.0: Issue haengt an einem PVER (Typ des gemappten Release).
+    // v2.96.1: auch am Kind-Release (FC-Typ); "PVER" darf Teil des Werts sein.
+    var _bt=String(row.bc_typ||"").trim(),_ft=String(row.fc_typ||"").trim();
+    [_bt,_ft].forEach(function(t){if(t&&x.rt.indexOf(t)<0)x.rt.push(t);});
+    if(isPverTyp(_bt)){x.pver=true;if(x.pvWhy!=="bc"){x.pvWhy="bc";x.pv=row.bc_name||x.pv||"";}}
+    else if(isPverTyp(_ft)){x.pver=true;if(!x.pvWhy){x.pvWhy="fc";x.pv=row.fc_name||"";}}
+    if(row.iss_typ&&!x.typ)x.typ=String(row.iss_typ);
     var w=String(row.wi_id||"").trim();
     if(w&&x.wis.indexOf(w)<0)x.wis.push(w);
   });
   return m;
 }
+// PVER-Erkennung. v2.96.2 (Maik): aufgeloest wird ein Issue, wenn sein Typ
+// IssueSW ist UND das gemappte Release (oder Kind-Release) vom Typ PVER.
+function isPverTyp(t){return /(^|[^A-Z])PVER([^A-Z]|$)/i.test(String(t||""));}
+function isSwIssue(t){return /^issue[\s_-]*sw$/i.test(String(t||"").trim());}
+function pverWhy(x){if(!x||!x.pver||!isSwIssue(x.typ))return "";return x.pvWhy||"bc";}
 function isIssueIndex(v){
   if(!v||typeof v!=="object"||Array.isArray(v))return false;
   return Object.keys(v).every(function(k){var x=v[k];return x&&typeof x==="object"&&Array.isArray(x.wis);});
 }
-if(typeof window!=="undefined"){window.buildIssueIndex=buildIssueIndex;window.isIssueIndex=isIssueIndex;}
+if(typeof window!=="undefined"){window.buildIssueIndex=buildIssueIndex;window.isIssueIndex=isIssueIndex;window.isPverTyp=isPverTyp;window.isSwIssue=isSwIssue;window.pverWhy=pverWhy;}
 
 function normalizeToClearQuestTable(rawRows){
-  function _get(row,srcList){for(var i=0;i<srcList.length;i++){var v=row[srcList[i]];if(v!==undefined&&v!==null&&String(v).trim()!="")return String(v).trim();}return "";}
+  function _get(row,srcList,ci){for(var i=0;i<srcList.length;i++){var v=row[srcList[i]];if(v!==undefined&&v!==null&&String(v).trim()!="")return String(v).trim();}
+    // v2.96.2: fuer die Typ-Spalten auch ohne Gross-/Kleinschreibung und Leerzeichen am Rand
+    // ("hasMappedRelease.type" statt ".Type").
+    if(ci){
+      if(!_lk){_lk={};(rawRows||[]).slice(0,200).forEach(function(r){Object.keys(r||{}).forEach(function(k){var l=k.trim().toLowerCase();if(!(l in _lk))_lk[l]=k;});});}
+      for(var j=0;j<srcList.length;j++){var key=_lk[String(srcList[j]).toLowerCase()];
+        if(key!==undefined){var w=row[key];if(w!==undefined&&w!==null&&String(w).trim()!="")return String(w).trim();}}
+    }
+    return "";}
+  var _lk=null;
   function _pd(s){if(!s)return "";s=String(s).trim();var fmts=[{re:/^(\d{2})\.(\d{2})\.(\d{2})[, ]/,fn:function(m){return "20"+m[3]+"-"+m[2]+"-"+m[1];}},{re:/^(\d{2})\.(\d{2})\.(\d{4})[, ]/,fn:function(m){return m[3]+"-"+m[2]+"-"+m[1];}},{re:/^(\d{2})\.(\d{2})\.(\d{2})$/,fn:function(m){return "20"+m[3]+"-"+m[2]+"-"+m[1];}},{re:/^(\d{2})\.(\d{2})\.(\d{4})$/,fn:function(m){return m[3]+"-"+m[2]+"-"+m[1];}},{re:/^(\d{4})-(\d{2})-(\d{2})/,fn:function(m){return m[1]+"-"+m[2]+"-"+m[3];}}];for(var i=0;i<fmts.length;i++){var m=s.match(fmts[i].re);if(m)return fmts[i].fn(m);}return "";}
   function _cn(s){return s?String(s).trim().replace(/\s*\(.*?\)\s*$/g,"").trim():"";}
   function _cd(s){if(!s)return "";var m=String(s).trim().match(/\(([^)]+)\)\s*$/);return m?m[1].trim():"";}
@@ -4272,7 +4352,7 @@ function normalizeToClearQuestTable(rawRows){
     return null;}
   return rawRows.map(function(row){
     var n={};
-    CQ_MAPPING.forEach(function(m){n[m.field]=_get(row,m.src);});
+    CQ_MAPPING.forEach(function(m){n[m.field]=_get(row,m.src,m.ci);});
     ["wi_start","wi_end","bc_deadline","fc_deadline"].forEach(function(f){if(n[f])n[f]=_pd(n[f])||n[f];});
     if(n.wi_assignee){if(!n.wi_abteilung)n.wi_abteilung=_cd(n.wi_assignee);n.wi_assignee=_cn(n.wi_assignee);}
     // Aufwand: R_Eff → EstimationEffort → 8h  (identisch zu parseClearQuest)
@@ -5337,6 +5417,23 @@ function BootScreenOverlay(p){
   );
 }
 
+// v2.94.1: Stabile Huelle fuer die Ansichten, die INNERHALB von Planungstool
+// definiert sind. Als Komponente eingebunden bekam jede bei jedem Rendern
+// eine neue Identitaet -- React baute sie komplett neu auf, und ihr Zustand
+// (offene Menues, Suchtext, Aufgeklapptes, Sortierung) ging bei jeder
+// Aenderung im Elternteil verloren. Beispiel Flow: eine Spaltenbreite
+// eingetippt, schon war das Spalten-Menue zu und die Suche leer. Dieselbe
+// Familie wie die doppelte Startmaske (v2.92.1).
+// Die Huelle ruft die Ansicht als Funktion auf: ihre Hooks gehoeren damit
+// der Huelle, deren Identitaet stabil ist. Jede Einbindung traegt einen
+// eigenen key, damit ein Wechsel der Ansicht sauber neu aufbaut.
+// Bedingung: keine Ansicht darf vor ihrem letzten Hook aussteigen. Der
+// Bericht tut das im gesperrten Zustand -- sein key enthaelt deshalb den
+// Freischaltzustand.
+function ViewHost(p){return p.render();}
+// v2.96.3: fester Wirt fuer Zeilen mit eigenem Zustand (GanttRow).
+function RowHost(p){return p.render(p);}
+
 // ══════════════════════════════════════════════════════════
 function Planungstool(){
   var s_sideOpen=useState(function(){try{return window.innerWidth>=768;}catch(_){return true;}}); var sideOpen=s_sideOpen[0],setSideOpen=s_sideOpen[1]; // v2.39.0: mobil default eingeklappt
@@ -5465,7 +5562,10 @@ function Planungstool(){
       return function(){clearTimeout(t);};
     }
   },[]);
-  useEffect(function(){setLaneOverrides({});}, [rawData]);
+  // v2.95.1: Ebenen von Hand nur bei einem NEUEN Import zuruecksetzen (der
+  // Status in ClearQuest kann sich geaendert haben) -- nicht beim Start.
+  var rawSeenRef=useRef(false);
+  useEffect(function(){if(!rawSeenRef.current){rawSeenRef.current=true;return;}setLaneOverrides({});}, [rawData]);
   useEffect(function(){window._setImportWarning=setImportWarning;return function(){delete window._setImportWarning;};},[]);
 
 
@@ -5626,7 +5726,7 @@ function Planungstool(){
   function flowSetColWLive(key,px){
     var p=flowColsRef.current;
     var w=Object.assign({},p.w);w[key]=px;
-    var n={order:p.order,w:w,hidden:p.hidden};
+    var n=Object.assign({},p,{w:w}); // v2.94.1: labelW bleibt erhalten
     flowColsRef.current=n;
     setFlowColsRaw(n);
   }
@@ -5635,14 +5735,18 @@ function Planungstool(){
       var o=p.order.slice(),i=o.indexOf(key),j=i+dir;
       if(i<0||j<0||j>=o.length)return p;
       o[i]=o[j];o[j]=key;
-      return {order:o,w:p.w,hidden:p.hidden};
+      return Object.assign({},p,{order:o});
     });
   }
+  // v2.94.1: Jeder Setter uebernimmt den bisherigen Stand und ersetzt nur sein
+  // Feld. Bis v2.94.0 bauten vier Setter das Objekt aus order/w/hidden neu --
+  // labelW (Breite \"Bezeichnung\", seit v2.84.0) fiel dabei weg und sprang
+  // auf 240 px zurueck, sobald man irgendeine andere Spalte anfasste.
   function flowSetColW(key,px){
-    updateFlowCols(function(p){var w=Object.assign({},p.w);w[key]=px;return {order:p.order,w:w,hidden:p.hidden};});
+    updateFlowCols(function(p){var w=Object.assign({},p.w);w[key]=px;return Object.assign({},p,{w:w});});
   }
   function flowToggleCol(key){
-    updateFlowCols(function(p){var h=Object.assign({},p.hidden);if(h[key])delete h[key];else h[key]=true;return {order:p.order,w:p.w,hidden:h};});
+    updateFlowCols(function(p){var h=Object.assign({},p.hidden);if(h[key])delete h[key];else h[key]=true;return Object.assign({},p,{hidden:h});});
   }
   function flowResetCols(){updateFlowCols(function(){return null;});}
 
@@ -5662,7 +5766,7 @@ function Planungstool(){
   function bcSetColWLive(key,px){
     var p=bcColsRef.current;
     var w=Object.assign({},p.w);w[key]=px;
-    var n={order:p.order,w:w,hidden:p.hidden};
+    var n=Object.assign({},p,{w:w}); // v2.94.1
     bcColsRef.current=n;setBcColsRaw(n);
   }
   function bcMoveCol(key,dir){
@@ -5670,14 +5774,14 @@ function Planungstool(){
       var o=p.order.slice(),i=o.indexOf(key),j=i+dir;
       if(i<0||j<0||j>=o.length)return p;
       o[i]=o[j];o[j]=key;
-      return {order:o,w:p.w,hidden:p.hidden};
+      return Object.assign({},p,{order:o});
     });
   }
   function bcSetColW(key,px){
-    updateBcCols(function(p){var w=Object.assign({},p.w);w[key]=px;return {order:p.order,w:w,hidden:p.hidden};});
+    updateBcCols(function(p){var w=Object.assign({},p.w);w[key]=px;return Object.assign({},p,{w:w});});
   }
   function bcToggleCol(key){
-    updateBcCols(function(p){var h=Object.assign({},p.hidden);if(h[key])delete h[key];else h[key]=true;return {order:p.order,w:p.w,hidden:h};});
+    updateBcCols(function(p){var h=Object.assign({},p.hidden);if(h[key])delete h[key];else h[key]=true;return Object.assign({},p,{hidden:h});});
   }
   function bcResetCols(){updateBcCols(function(){return null;});}
   var bcColResize=useCallback(function(e,key,startW){
@@ -5815,11 +5919,11 @@ function Planungstool(){
   // v2.84.0: eigene Fassung fuer die feste Spalte -- sie liegt nicht in w.
   function flowSetLabelWLive(px){
     var p=flowColsRef.current;
-    var n={order:p.order,w:p.w,hidden:p.hidden,labelW:px};
+    var n=Object.assign({},p,{labelW:px});
     flowColsRef.current=n;setFlowColsRaw(n);
   }
   function flowSetLabelW(px){
-    updateFlowCols(function(p){return {order:p.order,w:p.w,hidden:p.hidden,labelW:px};});
+    updateFlowCols(function(p){return Object.assign({},p,{labelW:px});});
   }
   var flowLabelResize=useCallback(function(e,startW){
     if(e.preventDefault)e.preventDefault();
@@ -5866,10 +5970,21 @@ function Planungstool(){
     window.addEventListener("pointercancel",onUp);
     document.body.style.cursor="col-resize";document.body.style.userSelect="none";
   },[]);
-  var s_manualBlockers=useState({}); var manualBlockers=s_manualBlockers[0],setManualBlockers=s_manualBlockers[1];
-  var s_prioOrder=useState({}); var prioOrder=s_prioOrder[0],setPrioOrder=s_prioOrder[1];
-  var s_laneOverrides=useState({}); var laneOverrides=s_laneOverrides[0],setLaneOverrides=s_laneOverrides[1];
-  var s_wipLimits=useState({}); var wipLimits=s_wipLimits[0],setWipLimits=s_wipLimits[1];
+  // v2.95.1: Die Eingaben des Flow werden gespeichert. Bis v2.95.0 lagen
+  // Blocker, Prioritaeten, Ebenen von Hand und WIP-Limits nur im Arbeits-
+  // speicher -- nach jedem Neuladen waren sie weg (nur die Datensicherung
+  // nahm sie mit). Neu: der Ablieferwunsch des Auftraggebers je Issue.
+  function flowStore(key,label){return safeMap(key,label,lsLoad(key,null),{});}
+  var s_manualBlockers=useState(function(){return flowStore("ptool_flow_blockers","Flow-Blocker");}); var manualBlockers=s_manualBlockers[0],setManualBlockers=s_manualBlockers[1];
+  var s_prioOrder=useState(function(){return flowStore("ptool_flow_prio","Flow-Priorit\u00e4ten");}); var prioOrder=s_prioOrder[0],setPrioOrder=s_prioOrder[1];
+  var s_laneOverrides=useState(function(){return flowStore("ptool_flow_lanes","Flow-Ebenen");}); var laneOverrides=s_laneOverrides[0],setLaneOverrides=s_laneOverrides[1];
+  var s_wipLimits=useState(function(){return flowStore("ptool_flow_wip","WIP-Limits");}); var wipLimits=s_wipLimits[0],setWipLimits=s_wipLimits[1];
+  var s_flowWunsch=useState(function(){return flowStore("ptool_flow_wunsch","Ablieferw\u00fcnsche");}); var flowWunsch=s_flowWunsch[0],setFlowWunsch=s_flowWunsch[1];
+  useEffect(function(){try{localStorage.setItem("ptool_flow_blockers",JSON.stringify(manualBlockers));}catch(e){}},[manualBlockers]);
+  useEffect(function(){try{localStorage.setItem("ptool_flow_prio",JSON.stringify(prioOrder));}catch(e){}},[prioOrder]);
+  useEffect(function(){try{localStorage.setItem("ptool_flow_lanes",JSON.stringify(laneOverrides));}catch(e){}},[laneOverrides]);
+  useEffect(function(){try{localStorage.setItem("ptool_flow_wip",JSON.stringify(wipLimits));}catch(e){}},[wipLimits]);
+  useEffect(function(){try{localStorage.setItem("ptool_flow_wunsch",JSON.stringify(flowWunsch));}catch(e){}},[flowWunsch]);
   var s_wipEdit=useState(null); var wipEdit=s_wipEdit[0],setWipEdit=s_wipEdit[1];
   var s_umplMode=useState("karten"); var umplMode=s_umplMode[0],setUmplMode=s_umplMode[1];
   // v2.43.0: eigener MA-Filter der Umplanung, unabhaengig vom Team-Filter links
@@ -6012,7 +6127,7 @@ function Planungstool(){
   stateRef.current={view:view,zoom:zoom,hiddenRel:hiddenRel,hiddenEmp:hiddenEmp,
     rangeStart:rangeStart,rangeEnd:rangeEnd,releases:releases,employees:employees,
     rawData:rawData,absences:absences,customColors:customColors,manualBlockers:manualBlockers,prioOrder:prioOrder,laneOverrides:laneOverrides,wipLimits:wipLimits,
-    cqUrl:cqUrl,timeEntries:timeEntries,accounts:accounts,holCfg:holCfg,scenarios:scenarios,issueIdx:issueIdx};
+    cqUrl:cqUrl,timeEntries:timeEntries,accounts:accounts,holCfg:holCfg,scenarios:scenarios,issueIdx:issueIdx,flowWunsch:flowWunsch};
 
   // ── v2.39.0: Persistenz mit Nutzer-Feedback bei Fehlschlag (Quota etc.) ──
   // setTimeout(…,0) verhindert setState während der Render-Phase, falls der
@@ -9584,7 +9699,8 @@ function Planungstool(){
     );
   }
 
-  var GanttRow=memo(function GanttRow(p){
+  function GanttRowImpl(p){
+    var _lockDown=useRef(null);
     var pad=16+(p.indent||0);
     var _simMode=p.simMode||false;
     var _origPkgById=p.origPkgById||{};
@@ -9755,7 +9871,11 @@ function Planungstool(){
                 try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}
                 var d0={id:pk.id,x0:e.clientX,dx:0,moved:false,mode:"move"};
                 dragRef.current=d0;dragEndRef.current=endDrag;setDrag(d0);
-              }:null,
+              }:function(e){
+                if(e.button!=null&&e.button!==0)return;
+                try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}
+                _lockDown.current={x:e.clientX,t:Date.now()};
+              },
               onPointerMove:_canDrag?function(e){
                 var dr=dragRef.current;
                 if(!dr||dr.id!==pk.id)return;
@@ -9765,7 +9885,14 @@ function Planungstool(){
               }:null,
               onPointerUp:_canDrag?function(){
                 if(dragEndRef.current)dragEndRef.current();
-              }:null,
+              }:function(e){
+                var ld=_lockDown.current;_lockDown.current=null;
+                if(ld&&Math.abs(e.clientX-ld.x)>6){
+                  dragMovedRef.current=true;
+                  setToast("\u26a0\ufe0f Verschieben gesperrt: "+(anyUmbuch?"Umbuchen":"Simulation")+" ist aktiv \u2014 dort stehen berechnete Termine. Erst beenden, dann ziehen.");
+                  setTimeout(function(){setToast(null);},4000);
+                }
+              },
               onPointerCancel:_canDrag?function(){dragRef.current=null;dragEndRef.current=null;setDrag(null);}:null,
               onClick:function(e){
                 e.stopPropagation();
@@ -9816,7 +9943,7 @@ function Planungstool(){
         })
       )
     );
-  });
+  }
 
   // ── DepArrows (SVG-Overlay für Abhängigkeitspfeile) ───
   function DepArrows({containerRef}){
@@ -10216,10 +10343,16 @@ function Planungstool(){
                       var title=pkg.title||pkg.cn||"";
                       var shiftVal=item.daysLost||item.shiftDays||0;
                       var shift=shiftVal>0?"+"+shiftVal+" AT":""; // v2.92.2: AT-Wert
-                      return React.createElement("div",{key:i,style:{fontSize:"var(--fs-xs)",borderRadius:"var(--r-sm)",background:"rgb(var(--c-surface-rgb) / 0.6)",padding:"3px 6px"}},
+                      // v2.95.2: Titel nutzt die Kartenbreite (bis zwei Zeilen, dann
+                      // Auslassung) statt fest nach 35 Zeichen abgeschnitten zu werden;
+                      // der volle Titel steht im Tooltip. Klick oeffnet das Workitem.
+                      return React.createElement("div",{key:i,"data-umpl-card":pkg.id||"",title:title,
+                        onClick:function(){if(item.pkg||pkg.id){setEditPkg(pkg);setModal("editPkg");}},
+                        style:{fontSize:"var(--fs-xs)",borderRadius:"var(--r-sm)",background:"rgb(var(--c-surface-rgb) / 0.6)",padding:"3px 6px",cursor:"pointer",minWidth:0}},
                         id&&React.createElement(CopyID,{id:id,label:id,style:{fontSize:"var(--fs-2xs)"}}),
-                        React.createElement("div",{style:{color:A.text,marginTop:1,fontSize:"var(--fs-xs)"}},
-                          (title||"").substring(0,35)+(title.length>35?"…":"")),
+                        React.createElement("div",{"data-umpl-title":"1",style:{color:A.text,marginTop:1,fontSize:"var(--fs-xs)",lineHeight:1.35,
+                          overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",wordBreak:"break-word"}},
+                          title||""),
                         shift&&React.createElement("div",{style:{color:cat.color,fontSize:"var(--fs-2xs)",fontWeight:700}},shift)
                       );
                     }),
@@ -10506,7 +10639,7 @@ function Planungstool(){
                 // Direkte Workitems einzeln (nur mit sichtbarer WI-Ebene)
                 showWiLevel&&directForEmp.map(function(pkg,pi){
                   var pkgFull={...pkg,rc:getBcColor(r),rn:r.name,cn:"",fcDueDate:"",bcDueDate:r.dueDate||""};
-                  return React.createElement(GanttRow,{key:pkg.id,pkgId:pkg.id,label:wiLabel(pkg.title,r.name,""),labelFull:pkg.title,sublabel:r.name,pkgs:[pkgFull],bg:pi%2===0?A.surface:"var(--c-surface-alt)",empId:emp.id,indent:16,simMode:simActive,origPkgById:origPkgById});
+                  return React.createElement(RowHost,{render:GanttRowImpl,key:pkg.id,pkgId:pkg.id,label:wiLabel(pkg.title,r.name,""),labelFull:pkg.title,sublabel:r.name,pkgs:[pkgFull],bg:pi%2===0?A.surface:"var(--c-surface-alt)",empId:emp.id,indent:16,simMode:simActive,origPkgById:origPkgById});
                 }),
                 // FCs mit Paketen dieses MA -- v2.60.0: immer sichtbar.
                 fcsForEmp.map(function(c){
@@ -10554,7 +10687,7 @@ function Planungstool(){
                     // FC-Pakete
                     isFcExp&&fcPkgsForEmp.map(function(pkg,pi){
                       var pkgFull={...pkg,rc:getBcColor(r),rn:r.name,cn:c.name,fcDueDate:c.dueDate||"",bcDueDate:r.dueDate||""};
-                      return React.createElement(GanttRow,{key:pkg.id,pkgId:pkg.id,label:wiLabel(pkg.title,r.name,c.name),labelFull:pkg.title,sublabel:c.name,pkgs:[pkgFull],bg:pi%2===0?A.surface:"var(--c-surface-alt)",empId:emp.id,indent:40,simMode:simActive,origPkgById:origPkgById});
+                      return React.createElement(RowHost,{render:GanttRowImpl,key:pkg.id,pkgId:pkg.id,label:wiLabel(pkg.title,r.name,c.name),labelFull:pkg.title,sublabel:c.name,pkgs:[pkgFull],bg:pi%2===0?A.surface:"var(--c-surface-alt)",empId:emp.id,indent:40,simMode:simActive,origPkgById:origPkgById});
                     })
                   );
                 })
@@ -11146,7 +11279,7 @@ function Planungstool(){
                 var pkgFull={...pkg,rc:getBcColor(r),rn:r.name,cn:c.name,
                   fcDueDate:c.dueDate||"",bcDueDate:r.dueDate||""};
                 var pEmp=employees.find(function(e){return e.id===pkg.employee;});
-                return React.createElement(GanttRow,{key:pkg.id,pkgId:pkg.id,
+                return React.createElement(RowHost,{render:GanttRowImpl,key:pkg.id,pkgId:pkg.id,
                   label:wiLabel(pkg.title,r.name,c.name),labelFull:pkg.title,
                   sublabel:pEmp?pEmp.name:"(ohne Mitarbeiter)",
                   pkgs:[pkgFull],bg:pi%2===0?A.surface:"var(--c-surface-alt)",
@@ -12767,6 +12900,10 @@ function Planungstool(){
     // v2.44.0: hidCols wanderte nach Planungstool (flowCols.hidden), damit die
     // Konfiguration Re-Renders ueberlebt und persistiert werden kann.
     var s_cp=useState(false);         var showCP=s_cp[0],setShowCP=s_cp[1];
+    // v2.95.0: Kompakte Zeilen (Voreinstellung) -- eine Zeile je Issue.
+    var s_cmp=useState(function(){try{return localStorage.getItem("ptool_flow_compact")!=="0";}catch(e){return true;}});
+    var compact=s_cmp[0];
+    function toggleCompact(){var n=!compact;try{localStorage.setItem("ptool_flow_compact",n?"1":"0");}catch(e){}s_cmp[1](n);}
 
     // ── Hilfsfunktionen ────────────────────────────────────────────────
     function atDiff(d1,d2){
@@ -12820,9 +12957,11 @@ function Planungstool(){
       var issMap={};
       Object.keys(issueIdx).forEach(function(id){
         var x=issueIdx[id],fm={};
-        (x.fcs||[]).forEach(function(f){fm[f.id||f.name]={name:f.name,id:f.id||""};});
+        // v2.95.0: known=false, wenn der Index aus einer Version ohne Tags stammt
+        (x.fcs||[]).forEach(function(f){fm[f.id||f.name]={name:f.name,id:f.id||"",fcTags:f.tags||"",fcExtDesc:f.desc||"",known:f.tags!==undefined};});
         issMap[id]={id:id,title:x.t||id,lcs:x.l||"",bcName:x.bc||"",bcId:x.bcId||"",
-          bcPlan:x.bcPlan||"",committed:x.com||"",bcWunsch:"",fcMap:fm,wiIds:(x.wis||[]).slice()};
+          bcPlan:x.bcPlan||"",committed:x.com||"",bcWunsch:flowWunsch[id]||"",fcMap:fm,wiIds:(x.wis||[]).slice(),
+          pver:!!pverWhy(x),pvName:x.pv||""};
       });
       // 2. Pro Issue: Werte aus allPkgs aggregieren
       return Object.values(issMap).map(function(iss){
@@ -12879,9 +13018,93 @@ function Planungstool(){
           developers:developers,
           wis:wis,wiCount:wis.length,
           missing:missing,
+          pver:iss.pver,pvName:iss.pvName,
         };
+      }).reduce(expandPver,[]);
+    },[issueIdx,allPkgs,releases,employees,capEndMap,canSeeAll,selfEmp,flowWunsch]);
+
+    // ── v2.96.0: PVER-Issues -> je Workitem eine Zeile (Entscheidung Maik) ──
+    // Ein Issue, dessen gemapptes Release ein PVER ist, ist nur der Rahmen;
+    // gesteuert wird ueber seine Workitems. Jedes wird zu einer eigenen Zeile:
+    // Ebene nach WI-Status (started -> 4, sonst nach dem Issue-Status),
+    // Ampel und \"Fehlt\" gegen das geplante Ende des Workitems.
+    function expandPver(acc,row){
+      if(!row.pver){acc.push(row);return acc;}
+      // v2.96.1: PVER-Issue ohne passendes Workitem -> keine Issue-Zeile.
+      if(!row.wis.length)return acc;
+      row.wis.forEach(function(p){
+        var emp=employees.find(function(e){return e.id===p.employee;});
+        var lcs=(p.lcs||"").toLowerCase();
+        var rem=(lcs==="closed"||lcs==="canceled")?0:(p.remainingHours||0);
+        var rb={};if(rem)rb[(emp&&emp.name)?flowName(emp):"Nicht zugewiesen"]=rem;
+        var ce=capEndMap[p.id]||p.end||"";
+        var miss=[];if(!emp)miss.push("Kein Assignee");if(!p.start)miss.push("Kein Startdatum");if(!ce)miss.push("Kein capEnd");
+        acc.push({id:p.id,title:p.title||p.id,lcs:row.lcs,isWi:true,parentId:row.id,parentTitle:row.title,
+          bcName:row.pvName||row.bcName,bcId:row.bcId,bcPlan:p.end||"",zielLabel:"Planende",
+          committed:row.committed,bcWunsch:flowWunsch[p.id]||"",fcList:row.fcList,
+          totalHours:Math.round((p.hours||0)*10)/10,remainingHours:Math.round(rem*10)/10,restByDev:rb,
+          predStart:p.start||"",predDelivery:ce,hasStartedWI:lcs==="started",
+          developers:(emp&&emp.name)?[flowName(emp)]:[],wis:[p],wiCount:1,missing:miss,pver:true,pvName:row.pvName});
       });
-    },[issueIdx,allPkgs,releases,employees,capEndMap,canSeeAll,selfEmp]);
+      return acc;
+    }
+
+    // ── v2.95.0: Was fehlt, damit der Issue seinen BC-Termin schafft ────
+    // Rangfolge: Termin, Start, Zuordnung, FC-Angaben. sev 3 = rot, 2 = gelb.
+    function fehltOf(iss){
+      var out=[];
+      if(iss.bcPlan&&iss.predDelivery){
+        var d=workdaysBetween2(iss.bcPlan,iss.predDelivery),k=ampelOfDelta(d);
+        if(k==="red")out.push({sev:3,kind:"termin",t:"+"+d+" AT",tip:"Prognose "+iss.predDelivery+" liegt "+d+" AT nach dem "+(iss.zielLabel||"BC-Ziel")+" "+iss.bcPlan});
+        else if(k==="amber")out.push({sev:2,kind:"termin",t:(-d)+" AT Puffer",tip:"Prognose "+iss.predDelivery+", "+(iss.zielLabel||"BC-Ziel")+" "+iss.bcPlan+" \u2014 nur "+(-d)+" AT Puffer"});
+      }
+      // v2.95.1: Ablieferwunsch des Auftraggebers verfehlt (gelb -- das BC-Ziel
+      // bleibt die verbindliche Grenze).
+      if(iss.bcWunsch&&iss.predDelivery&&iss.predDelivery>iss.bcWunsch){
+        var dw=workdaysBetween2(iss.bcWunsch,iss.predDelivery);
+        out.push({sev:2,kind:"wunsch",t:"Wunsch +"+dw+" AT",tip:"Prognose "+iss.predDelivery+" liegt "+dw+" AT nach dem Ablieferwunsch "+iss.bcWunsch});
+      }
+      if(iss.predStart&&iss.predStart<todayStr&&!iss.hasStartedWI&&iss.wis.length)
+        out.push({sev:3,kind:"start",t:"Start \u00fcberf\u00e4llig",tip:"Geplanter Start "+iss.predStart+", noch kein Workitem auf started"});
+      if(!iss.wis.length)out.push({sev:3,kind:"zuordnung",t:"ohne Workitem",tip:"Zum Issue gibt es kein Workitem"});
+      else{
+        var ohneMa=iss.wis.filter(function(p){return !p.employee||!employees.some(function(e){return e.id===p.employee;});}).length;
+        if(ohneMa)out.push({sev:3,kind:"zuordnung",t:iss.isWi?"ohne MA":ohneMa+" WI ohne MA",tip:ohneMa+" von "+iss.wis.length+" Workitems ohne Mitarbeiter"});
+        var ohneStart=iss.wis.filter(function(p){return !p.start;}).length;
+        if(ohneStart)out.push({sev:2,kind:"zuordnung",t:iss.isWi?"ohne Start":ohneStart+" WI ohne Start",tip:ohneStart+" Workitems ohne Startdatum"});
+      }
+      var fcBad=[],fcKnown=0;
+      (iss.fcList||[]).forEach(function(fc){
+        if(!fc.known)return;fcKnown++;
+        var tm=parseFcTags(fc.fcTags||"").missing,dm=parseFcExtDesc(fc.fcExtDesc||"").missing;
+        if(tm.length||dm.length)fcBad.push(fc.name+": "+tm.concat(dm).join(", "));
+      });
+      if(fcBad.length)out.push({sev:2,kind:"fc",t:"FC-Angaben "+fcBad.length+"/"+fcKnown,tip:"Unvollst\u00e4ndig:\n"+fcBad.join("\n")});
+      out.sort(function(a,b){return b.sev-a.sev;});
+      return out;
+    }
+    // v2.95.1: Ablieferwunsch des Auftraggebers -- direkt in der Zeile pflegbar.
+    function CellWunsch(iss){
+      return React.createElement("input",{type:"date","data-flow-wunsch":iss.id,value:iss.bcWunsch||"",
+        title:"Ablieferwunsch des Auftraggebers"+(iss.bcWunsch?"":" \u2014 noch nicht eingetragen"),
+        onClick:function(e){e.stopPropagation();},
+        onChange:function(e){var v=e.target.value;setFlowWunsch(function(p){var n=Object.assign({},p);if(v)n[iss.id]=v;else delete n[iss.id];return n;});},
+        style:{width:"100%",fontSize:"var(--fs-sm)",fontFamily:"inherit",padding:"1px 2px",borderRadius:"var(--r-sm)",
+          border:"1px solid "+(iss.bcWunsch?"transparent":alpha(A.border,"aa")),background:"transparent",
+          color:iss.bcWunsch?A.text:A.textLight,colorScheme:"inherit"}});
+    }
+    function CellFehlt(iss){
+      var f=iss.fehlt||[];
+      if(!f.length)return React.createElement("span",{"data-fehlt":"","style":{color:A.textLight}},"\u2013");
+      return React.createElement("div",{"data-fehlt":f.map(function(x){return x.kind;}).join(","),
+        title:f.map(function(x){return x.tip;}).join("\n"),
+        style:{display:"flex",gap:4,overflow:"hidden",whiteSpace:"nowrap",cursor:"help"}},
+        f.map(function(x,i){
+          var c=x.sev>=3?A.coralInk:A.amberInk,bg=x.sev>=3?A.coralLight:A.amberLight;
+          return React.createElement("span",{key:i,style:{fontSize:"var(--fs-xs)",fontWeight:700,color:c,background:bg,
+            borderRadius:"var(--r-sm)",padding:"1px 6px",flexShrink:0}},x.t);
+        }));
+    }
 
     // ── Ampel ─────────────────────────────────────────────────────────
     function calcAmpel(iss){
@@ -12920,6 +13143,25 @@ function Planungstool(){
               abgeschlossen:abgeschlossen,ueberschrieben:ueberschrieben};
     },[issues,laneOverrides]);
 
+    // v2.96.1: Selbstpruefung PVER/IssueSW -- was an den eigenen Daten greift.
+    var pverAudit=useMemo(function(){
+      var r={sw:0,pv:0,beide:0,zeilen:0,ohneWi:0,alt:false,ohneTyp:true,ohneIssTyp:true,typen:{},issTypen:{}};
+      if(!issueIdx)return r;
+      var keys=Object.keys(issueIdx),mitRt=0,parents={};
+      (issues||[]).forEach(function(i){if(i.isWi){r.zeilen++;parents[i.parentId]=true;}});
+      keys.forEach(function(k){
+        var x=issueIdx[k],why=pverWhy(x);
+        if(Array.isArray(x.rt)){mitRt++;x.rt.forEach(function(t){r.typen[t]=(r.typen[t]||0)+1;});if(x.rt.length)r.ohneTyp=false;}
+        if(isSwIssue(x.typ))r.sw++;
+        if(x.pver)r.pv++;
+        if(why){r.beide++;if(!parents[k])r.ohneWi++;}
+        var it=String(x.typ||"").trim();if(it)r.ohneIssTyp=false;else it="(leer)";
+        r.issTypen[it]=(r.issTypen[it]||0)+1;
+      });
+      r.alt=keys.length>0&&mitRt===0;
+      return r;
+    },[issueIdx,issues]);
+
     var s_showLA=useState(false); var showLA=s_showLA[0],setShowLA=s_showLA[1]; // v2.84.0
 
     // ── Swimlane-Zuweisung ────────────────────────────────────────────
@@ -12939,7 +13181,7 @@ function Planungstool(){
           var diff=Math.round((new Date(iss.predDelivery)-new Date(todayStr))/(864e5));
           if(diff>=0&&diff<=30)isNear=true;
         }
-        return Object.assign({},iss,{ampel:amp,isNear:isNear,lane:laneOverrides[iss.id]||getLane(iss)});
+        return Object.assign({},iss,{ampel:amp,isNear:isNear,lane:laneOverrides[iss.id]||getLane(iss),fehlt:fehltOf(iss)});
       });
     },[issues]);
 
@@ -12994,17 +13236,18 @@ function Planungstool(){
 
     // ── Excel-Export ─────────────────────────────────────────────────
     function doExport(){
-      var hdr=["Issue-Titel","Issue-ID","Ampel","BC","FC(s)","Pred. Start","Pred. Delivery","BC Wunsch","BC Plan","Committed","Rest (h)","Gesamt (h)","Entwickler","Fortschritt %"];
+      var hdr=["Issue-Titel","Issue-ID","Ampel","Fehlt","BC","FC(s)","Pred. Start","Pred. Delivery","BC Wunsch","BC Plan","Committed","Rest (h)","Gesamt (h)","Entwickler","Fortschritt %"];
       var rows=[hdr];
       filtered.forEach(function(iss){
         var pct=iss.totalHours>0?Math.round((1-iss.remainingHours/iss.totalHours)*100):0;
         rows.push([
           iss.title,iss.id,
           AMPEL_SYM[iss.ampel]||"",
+          (iss.fehlt||[]).map(function(x){return x.t;}).join(" \u00b7 "),
           iss.bcName+(iss.bcId?" ["+iss.bcId+"]":""),
           iss.fcList.map(function(f){return f.name+(f.id?" ["+f.id+"]":"");}).join("; ")||"",
           iss.predStart||"",iss.predDelivery||"",
-          "","",iss.committed||"",
+          iss.bcWunsch||"",iss.bcPlan||"",iss.committed||"", // v2.95.0: BC Plan war immer leer
           iss.remainingHours,iss.totalHours,
           iss.developers.join(", "),pct
         ]);
@@ -13412,6 +13655,8 @@ function Planungstool(){
 
 
     function CellBC(iss){
+      if(compact)return React.createElement("div",{title:(iss.bcName||"")+(iss.bcId?" ["+iss.bcId+"]":""),
+        style:{fontSize:"var(--fs-sm)",fontWeight:600,color:A.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},iss.bcName||"\u2013");
       return React.createElement("div",{style:{fontSize:"var(--fs-sm)"}},
         React.createElement("span",{style:{fontWeight:600,color:A.text}},iss.bcName||"–"),
         iss.bcId&&React.createElement("span",{style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-2xs)",color:A.textLight,marginLeft:4}},"["+iss.bcId+"]")
@@ -13460,6 +13705,7 @@ function Planungstool(){
       );
     }
     function CellPredDel(iss){
+      if(compact)return React.createElement("span",{title:iss.predDelivery?relTime(iss.predDelivery):"",style:{fontSize:"var(--fs-sm)",color:A.text,whiteSpace:"nowrap"}},fd(iss.predDelivery));
       return React.createElement("div",null,
         React.createElement("span",{style:{fontSize:"var(--fs-sm)",color:A.text}},fd(iss.predDelivery)),
         iss.predDelivery&&React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,marginTop:1}},relTime(iss.predDelivery))
@@ -13467,6 +13713,8 @@ function Planungstool(){
     }
     function CellBCPlan(iss){
       var diff=iss.bcPlan?atDiff(todayStr,iss.bcPlan):0;
+      if(compact)return React.createElement("span",{title:iss.bcPlan?(diff>0?"noch "+diff+" AT":diff===0?"heute":"\u00fcberf\u00e4llig"):"",
+        style:{fontSize:"var(--fs-sm)",color:diff<0&&iss.bcPlan?A.coral:A.text,whiteSpace:"nowrap"}},fd(iss.bcPlan)||"\u2013");
       return React.createElement("div",null,
         React.createElement("div",{style:{display:"flex",alignItems:"center",gap:4}},
           React.createElement("span",{style:{fontSize:"var(--fs-sm)",color:A.text}},fd(iss.bcPlan)||"–")
@@ -13488,11 +13736,12 @@ function Planungstool(){
     function renderCell(iss,col){
       switch(col.key){
         case "ampel":    return CellAmpel(iss);
+        case "fehlt":    return CellFehlt(iss);
         case "bc":       return CellBC(iss);
         case "fc":       return CellFC(iss);
         case "predStart":return React.createElement("span",{style:{fontSize:"var(--fs-sm)"}},fd(iss.predStart));
         case "predDel":  return CellPredDel(iss);
-        case "bcWunsch": return React.createElement("span",{style:{fontSize:"var(--fs-sm)",color:A.textLight}},fd(iss.bcWunsch)||"–");
+        case "bcWunsch": return CellWunsch(iss);
         case "bcPlan":   return CellBCPlan(iss);
         case "committed":return React.createElement("span",{style:{fontSize:"var(--fs-sm)"}},fd(iss.committed)||"–");
         case "rest":     return React.createElement("span",{title:restSplit(iss,"\n")||"–",style:{fontSize:"var(--fs-sm)",fontWeight:600,color:A.text,cursor:"help"}},iss.remainingHours+"h");
@@ -13523,6 +13772,24 @@ function Planungstool(){
           onContextMenu:function(e){e.preventDefault();setModal({type:"laneMenu",issue:Object.assign({},iss,{_origLane:iss.lane})});}
         },
           // Fix-Spalte
+          compact?React.createElement("td",{"data-flow-row":iss.id,style:{
+            position:"sticky",left:0,background:rowBg||A.surface,zIndex:2,
+            padding:"4px 10px",width:LBLW,minWidth:LBLW,maxWidth:LBLW,
+            borderRight:"2px solid "+A.border,verticalAlign:"middle"
+          }},
+            React.createElement("div",{style:{display:"flex",gap:6,alignItems:"center",minWidth:0}},
+              React.createElement("button",{"data-exp":"1",
+                onClick:function(e){e.stopPropagation();setExp(function(p){var n=Object.assign({},p);n[iss.id]=!n[iss.id];return n;});},
+                style:{background:"none",border:"none",cursor:"pointer",color:A.textLight,padding:0,flexShrink:0,fontSize:"var(--fs-xs)"}
+              },isExp?"\u25be":"\u25b8"),
+              React.createElement("span",{"data-flow-wi":iss.isWi?iss.parentId:null,
+                title:iss.title+" \u00b7 "+iss.id+(iss.isWi?"\nWorkitem des PVER-Issues "+iss.parentId+" "+(iss.parentTitle||""):""),
+                style:{fontWeight:iss.isWi?600:700,fontSize:"var(--fs-md)",color:A.text,
+                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0,flex:1}},(iss.isWi?"\u2699 ":"")+iss.title),
+              React.createElement(CopyID,{id:iss.id,label:iss.id,style:{fontSize:"var(--fs-2xs)",flexShrink:0}}),
+              BlockerIcon(iss)
+            )
+          ):
           React.createElement("td",{style:{
             position:"sticky",left:0,background:rowBg||A.surface,zIndex:2,
             padding:"8px 10px",width:LBLW,minWidth:LBLW,maxWidth:LBLW,
@@ -13539,7 +13806,7 @@ function Planungstool(){
                   fontWeight:700,fontSize:"var(--fs-md)",color:A.text,lineHeight:1.3,
                   overflow:"hidden",textOverflow:"ellipsis",
                   display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"
-                }},iss.title),
+                }},(iss.isWi?"\u2699 ":"")+iss.title),
                 React.createElement("div",{style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-2xs)",color:A.textMid,marginTop:2,display:"flex",alignItems:"center",gap:4,flexWrap:"wrap"}},
                   React.createElement(CopyID,{id:iss.id,label:iss.id,style:{fontSize:"var(--fs-2xs)"}}),
                   BlockerIcon(iss),
@@ -13555,7 +13822,7 @@ function Planungstool(){
           // Scrollbare Spalten
           visCols.map(function(col){
             return React.createElement("td",{key:col.key,
-              style:{padding:"8px 10px",width:col.w,minWidth:col.w,maxWidth:col.w,verticalAlign:"middle",fontSize:"var(--fs-sm)",
+              style:{padding:compact?"4px 10px":"8px 10px",width:col.w,minWidth:col.w,maxWidth:col.w,verticalAlign:"middle",fontSize:"var(--fs-sm)",
                 borderRight:"1px solid "+alpha(A.border,"44"),overflow:"hidden"}
             },React.createElement("div",{className:"flowcell"},renderCell(iss,col)));
           })
@@ -13645,6 +13912,12 @@ function Planungstool(){
                 color:on?A.mint:A.textMid,fontWeight:on?700:400}},o.l);
           })
         ),
+        // v2.95.0: Kompakt / Ausfuehrlich
+        React.createElement("button",{"data-flow-compact":compact?"1":"0",onClick:toggleCompact,
+          title:compact?"Ausf\u00fchrliche Zeilen (Kennung, Abst\u00e4nde, Hinweise in eigener Zeile)":"Eine Zeile je Issue",
+          style:{padding:"5px 10px",borderRadius:"var(--r-sm)",cursor:"pointer",fontSize:"var(--fs-sm)",
+            border:"1px solid "+(compact?A.mint:A.border),background:compact?A.mintLight:"transparent",color:compact?A.mint:A.textMid}},
+          compact?"\u2630 Kompakt":"\u25a4 Ausf\u00fchrlich"),
         // KW-Toggle
         React.createElement("button",{onClick:function(){setKwMode(function(v){return !v;});},
           style:{padding:"5px 10px",borderRadius:"var(--r-sm)",cursor:"pointer",fontSize:"var(--fs-sm)",
@@ -13657,7 +13930,7 @@ function Planungstool(){
             onClick:function(){setShowLA(function(v){return !v;});},
             title:"Welche Statuswerte kommen vor und in welche Ebene fallen sie?",
             style:{padding:"5px 10px",borderRadius:"var(--r-sm)",cursor:"pointer",fontSize:"var(--fs-sm)",
-              border:"1px solid "+(laneAudit.ohneKriterium>0?A.amber:A.border),
+              border:"1px solid "+((laneAudit.ohneKriterium>0||pverAudit.alt)?A.amber:A.border),
               background:showLA?A.mintLight:A.bg,
               color:laneAudit.ohneKriterium>0?A.amber:A.textMid}},
             "\u2696 Ebenen"+(laneAudit.ohneKriterium>0?(" ("+laneAudit.ohneKriterium+")"):"")),
@@ -13709,7 +13982,26 @@ function Planungstool(){
               laneAudit.abgeschlossen>0&&React.createElement("div",{style:{color:A.coral,fontWeight:700}},
                 laneAudit.abgeschlossen+" mit Status closed/canceled \u2014 auf Issue-Ebene wird das nirgends abgefragt"),
               laneAudit.ueberschrieben>0&&React.createElement("div",null,
-                laneAudit.ueberschrieben+" per Hand auf eine feste Ebene gesetzt"))
+                laneAudit.ueberschrieben+" per Hand auf eine feste Ebene gesetzt")),
+            React.createElement("div",{"data-pver-audit":"1",style:{marginTop:10,paddingTop:8,borderTop:"1px solid "+A.border,
+              fontSize:"var(--fs-xs)",color:A.textMid,lineHeight:1.7}},
+              React.createElement("div",{style:{fontWeight:700,color:A.text}},"PVER / IssueSW → Workitem-Zeilen"),
+              pverAudit.alt
+                ? React.createElement("div",{style:{color:A.coral,fontWeight:700}},
+                    "Issue-Index stammt aus einer älteren Version — bitte die Rohdaten neu importieren.")
+                : pverAudit.ohneTyp&&React.createElement("div",{style:{color:A.amber,fontWeight:700}},
+                    "Keine Release-Typ-Spalte in den Daten (…hasMappedRelease.Type) — nur der Issue-Typ greift."),
+              !pverAudit.alt&&pverAudit.ohneIssTyp&&React.createElement("div",{style:{color:A.amber,fontWeight:700}},
+                "Kein Issue-Typ in den Daten (Spalte Type) — bitte die Rohdaten neu importieren."),
+              React.createElement("div",null,pverAudit.sw+" IssueSW · "+pverAudit.pv+" mit PVER-Release · "+pverAudit.beide+" beides → in Workitems aufgelöst"),
+              React.createElement("div",null,pverAudit.zeilen+" Workitem-Zeilen daraus"),
+              pverAudit.ohneWi>0&&React.createElement("div",null,pverAudit.ohneWi+" ohne passendes Workitem — ausgeblendet"),
+              React.createElement("div",{style:{color:A.textLight}},
+                "Issue-Typen: "+Object.keys(pverAudit.issTypen).sort(function(a,b){return pverAudit.issTypen[b]-pverAudit.issTypen[a];})
+                  .slice(0,6).map(function(t){return t+" ("+pverAudit.issTypen[t]+")";}).join(", ")),
+              Object.keys(pverAudit.typen).length>0&&React.createElement("div",{style:{color:A.textLight}},
+                "Release-Typen: "+Object.keys(pverAudit.typen).sort(function(a,b){return pverAudit.typen[b]-pverAudit.typen[a];})
+                  .slice(0,6).map(function(t){return t+" ("+pverAudit.typen[t]+")";}).join(", ")))
           )
         ),
         // Spalten-Picker
@@ -14038,7 +14330,7 @@ function Planungstool(){
             border:"1px solid "+A.border,background:"transparent",color:A.textMid}},"\u2715"):null
       )
     );
-    if(umplMode==="karten")return React.createElement(React.Fragment,null,modeSwitch,React.createElement(UmplanungKartenView,null));
+    if(umplMode==="karten")return React.createElement(React.Fragment,null,modeSwitch,React.createElement(ViewHost,{key:"vh-UmplanungKartenView",render:UmplanungKartenView}));
 
     return React.createElement(React.Fragment,null,modeSwitch,
       React.createElement("div",{style:{padding:20,maxWidth:1100}},
@@ -14296,7 +14588,7 @@ function Planungstool(){
       _exportedAt:new Date().toISOString(),
       releases:s.releases,employees:s.employees,rawData:s.rawData,issues:s.issueIdx||null, // v2.93.0
       absences:s.absences,customColors:s.customColors,
-      manualBlockers:s.manualBlockers,prioOrder:s.prioOrder,
+      manualBlockers:s.manualBlockers,prioOrder:s.prioOrder,flowWunsch:s.flowWunsch||{}, // v2.95.1
       laneOverrides:s.laneOverrides,wipLimits:s.wipLimits,
       hiddenRel:s.hiddenRel,hiddenEmp:s.hiddenEmp,
       rangeStart:s.rangeStart,rangeEnd:s.rangeEnd,
@@ -14352,6 +14644,7 @@ function Planungstool(){
         if(p.prioOrder)setPrioOrder(p.prioOrder);
         if(p.laneOverrides)setLaneOverrides(p.laneOverrides);
         if(p.wipLimits)setWipLimits(p.wipLimits);
+        if(p.flowWunsch&&typeof p.flowWunsch==="object")setFlowWunsch(p.flowWunsch); // v2.95.1
         if(p.hiddenRel)setHiddenRel(p.hiddenRel);
         if(p.hiddenEmp)setHiddenEmp(p.hiddenEmp);
         if(p.rangeStart)setRangeStart(p.rangeStart);
@@ -14671,7 +14964,10 @@ function Planungstool(){
                 var ns={...manualBlockers};if(nb.length>0)ns[issue.id]=nb;else delete ns[issue.id];
                 setManualBlockers(ns);
               }}),
-              React.createElement("span",{style:{flex:1,fontSize:"var(--fs-md)"}},"#"+other.id+" "+(other.name||"").substring(0,30))
+              // v2.95.2: Issues heissen title, nicht name -- der Titel fehlte hier ganz.
+              React.createElement("span",{title:"#"+other.id+" "+(other.title||other.name||""),
+                style:{flex:1,minWidth:0,fontSize:"var(--fs-md)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},
+                "#"+other.id+" "+(other.title||other.name||""))
             );
           })
         ),
@@ -15198,13 +15494,13 @@ function Planungstool(){
             )
           )
         ),
-        React.createElement(TimerBar,null),
+        React.createElement(ViewHost,{key:"vh-TimerBar",render:TimerBar}),
         React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0,minHeight:0}},
 
           React.createElement("div",{id:"main-scroll",style:{flex:1,overflowX:"auto",overflowY:"auto"}},
-          view==="report"?React.createElement(ReportView,null):view==="szenarien"?React.createElement(SzenarienView,null):view==="planist"?React.createElement(PlanIstView,null):
-          view==="dashboard"?React.createElement(DashboardView,null):view==="zeit"?React.createElement(ZeitView,null):view==="mitarbeiter"?React.createElement(MitarbeiterView,null):view==="flow"?React.createElement(FlowView,null):view==="bcplanung"?React.createElement(BCPlanungView,null):view==="rohdaten"?React.createElement(RohdatenView,{data:rawData,A:A}):view==="anforderungen"?React.createElement(AnforderungenView,null):view==="testfaelle"?React.createElement(TestfaelleView,null):view==="architektur"?React.createElement(ArchitekturView,null):view==="umplanung"?React.createElement(UmplanungView,null):view==="konflikte"?React.createElement(KonfliktView,null):React.createElement("div",{ref:ganttRef,style:{width:LW+tw,minWidth:LW+tw,position:"relative"}},
-          React.createElement(GanttHeader,null),React.createElement(auslMode==="matrix"?KapazitaetView:auslMode==="bc"?ReleaseView:AuslastungView,null))
+          view==="report"?React.createElement(ViewHost,{key:"vh-ReportView-"+(canSeeAll?1:0),render:ReportView}):view==="szenarien"?React.createElement(ViewHost,{key:"vh-SzenarienView",render:SzenarienView}):view==="planist"?React.createElement(ViewHost,{key:"vh-PlanIstView",render:PlanIstView}):
+          view==="dashboard"?React.createElement(ViewHost,{key:"vh-DashboardView",render:DashboardView}):view==="zeit"?React.createElement(ViewHost,{key:"vh-ZeitView",render:ZeitView}):view==="mitarbeiter"?React.createElement(ViewHost,{key:"vh-MitarbeiterView",render:MitarbeiterView}):view==="flow"?React.createElement(ViewHost,{key:"vh-FlowView",render:FlowView}):view==="bcplanung"?React.createElement(ViewHost,{key:"vh-BCPlanungView",render:BCPlanungView}):view==="rohdaten"?React.createElement(RohdatenView,{data:rawData,A:A}):view==="anforderungen"?React.createElement(ViewHost,{key:"vh-AnforderungenView",render:AnforderungenView}):view==="testfaelle"?React.createElement(ViewHost,{key:"vh-TestfaelleView",render:TestfaelleView}):view==="architektur"?React.createElement(ViewHost,{key:"vh-ArchitekturView",render:ArchitekturView}):view==="umplanung"?React.createElement(ViewHost,{key:"vh-UmplanungView",render:UmplanungView}):view==="konflikte"?React.createElement(ViewHost,{key:"vh-KonfliktView",render:KonfliktView}):React.createElement("div",{ref:ganttRef,style:{width:LW+tw,minWidth:LW+tw,position:"relative"}},
+          React.createElement(ViewHost,{key:"vh-GanttHeader",render:GanttHeader}),React.createElement(ViewHost,{key:"vh-ausl-"+auslMode,render:auslMode==="matrix"?KapazitaetView:auslMode==="bc"?ReleaseView:AuslastungView}))
         )
         )
       )
@@ -15218,7 +15514,7 @@ function Planungstool(){
       items:openWorkitems,istByWi:timeByWi,
       onChoose:function(w){timeStart(w);setQsOpen(false);},
       onClose:function(){setQsOpen(false);}}),
-    React.createElement(IdleDialog,null),
+    React.createElement(ViewHost,{key:"vh-IdleDialog",render:IdleDialog}),
     extAsk&&React.createElement(ExtViewOverlay,{
       onUnlock:function(){setExtView(true);setExtAsk(false);
         setToast("\uD83D\uDD13 Erweiterte Ansicht aktiv");setTimeout(function(){setToast(null);},2500);},
@@ -15303,7 +15599,7 @@ function Planungstool(){
     timeEdit&&React.createElement(TimeEditOverlay,{
       initial:timeEdit,wiList:openWorkitems,
       onSave:saveTimeEdit,onCancel:function(){setTimeEdit(null);}}),
-    React.createElement(ColorPicker,null),
+    React.createElement(ViewHost,{key:"vh-ColorPicker",render:ColorPicker}),
 
     // ── Toast ──────────────────────────────────────────────────────────
     undoMove&&React.createElement("div",{"data-undo-move":undoMove.id,style:{
