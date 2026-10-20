@@ -2091,6 +2091,7 @@ var BC_COL_MIN=48,BC_COL_MAX=600;
 // v2.53.0: Kacheln des Dashboards. Die Keys stehen als Marke auf jeder Kachel,
 // damit Panel und Ansicht nicht auseinanderlaufen koennen.
 var DASH_CARD_DEFS=[
+  {key:"M0", v:"me", label:"Heute \u00b7 Briefing", top:true}, // v2.98.0
   {key:"M1", v:"me", label:"Woran ich gerade arbeite"},
   {key:"M2", v:"me", label:"\u00dcberlastete Tage"},
   {key:"M3", v:"me", label:"Rutscht durch Kapazit\u00e4t nach hinten"},
@@ -2122,7 +2123,9 @@ function normalizeDashCards(v){
   if(v&&Object.prototype.toString.call(v.order)==="[object Array]"){
     v.order.forEach(function(k){if(DASH_CARD_BY_KEY[k]&&order.indexOf(k)<0)order.push(k);});
   }
-  DASH_CARD_DEFS.forEach(function(c){if(order.indexOf(c.key)<0)order.push(c.key);});
+  // v2.98.0: Neue Kacheln haengen hinten an -- ausser sie gehoeren nach oben
+  // (top). Sonst laege das Briefing in jedem gespeicherten Layout ganz unten.
+  DASH_CARD_DEFS.forEach(function(c){if(order.indexOf(c.key)<0){if(c.top)order.unshift(c.key);else order.push(c.key);}});
   if(v&&v.hidden){
     DASH_CARD_DEFS.forEach(function(c){if(v.hidden[c.key])hidden[c.key]=true;});
   }
@@ -2545,7 +2548,25 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="2.97.1";
+var APP_VERSION="2.98.0";
+// v2.98.0: Briefing -- was heute ansteht. Nach der Anmeldung einmal am Tag je
+//   Person ein Fenster, danach als Kachel M0 "Heute" oben im Dashboard. Beide
+//   zeigen dieselbe Liste (BriefingList): oben Kennzahlen (starten heute,
+//   faellig in 5 AT, ueberfaellig, BCs gelb/rot, Tage Ueberlast), darunter
+//   kurze Saetze. Eine Zeile springt in die passende Ansicht, eine Kennung
+//   oeffnet das Workitem. Gerechnet wird offline aus dem, was CAPLAN ohnehin
+//   hat: Analyse (Prognose), Lastkarte, Abwesenheitskarte, Feiertage
+//   (buildBriefing, rein und einzeln pruefbar). Horizonte tragen ihr Datum
+//   ("bis Fr 16.10.") statt "diese Woche".
+//   Die Import-Erinnerung (v2.75.0) ist darin aufgegangen: Ist der letzte
+//   Import nicht von heute, kommt das Fenster bei jedem Start, mit der
+//   Datenstand-Zeile oben und "Jetzt importieren".
+//   Sichtschutz: nur eigene Workitems. Ein fremder Vorgaenger erscheint mit
+//   Kennung und Titel, der Name nur in der erweiterten Ansicht (wie M5).
+//   ptool_brief_seen merkt "heute gezeigt" je Person ueber eine Pruefsumme
+//   des Namens -- Ansichtseinstellung, daher nicht im Lizenztor.
+//   Offline: React, ReactDOM, SheetJS und Schriften stehen seit 11.10. in der
+//   Datei; der Start ist mit gesperrtem Netz geprueft.
 // v2.97.1: Restaufwand aendern verschob fremde Termine. propagateDependencies
 //   ignorierte changedPkgId und schob JEDES Workitem im Plan, das vor dem Ende
 //   seines Vorgaengers startet (bei CQ-Daten viele). Jetzt nur das geaenderte
@@ -5537,6 +5558,349 @@ function ViewHost(p){return p.render();}
 // v2.96.3: fester Wirt fuer Zeilen mit eigenem Zustand (GanttRow).
 function RowHost(p){return p.render(p);}
 
+// ══════════════════════════════════════════════════════════════════════
+// v2.98.0 — BRIEFING: was heute ansteht
+//
+// Nach der Anmeldung einmal am Tag als Fenster, danach als Kachel M0 oben im
+// Dashboard. Regelbasiert aus Daten, die CAPLAN ohnehin rechnet (Analyse,
+// Lastkarte, Abwesenheitskarte, Feiertage) -- kein Netz, keine KI.
+// Inhalt nur aus den EIGENEN Workitems. Ein fremder Vorgaenger erscheint mit
+// Kennung und Titel, der Name nur in der erweiterten Ansicht (wie M5).
+// Zwei Horizonte, beide mit Datum beschriftet statt "diese Woche":
+//   h5  = 5 Arbeitstage ab heute  (Start, Faelligkeit)
+//   h10 = 10 Arbeitstage ab heute (Ueberlast, Vorgaenger, Abwesenheiten)
+// Workitems unter nicht freigegebenen Issues zaehlen nicht -- wie in der
+// Kapazitaet (countsForEffort).
+// ══════════════════════════════════════════════════════════════════════
+var BRIEF_SEEN_KEY="ptool_brief_seen";
+var BR_WD=["So","Mo","Di","Mi","Do","Fr","Sa"];
+var BR_WDL=["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
+var BR_MON=["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
+function brDay(ds){
+  var m=String(ds||"").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m?(m[3]+"."+m[2]+"."):"–";
+}
+// Wochentag und Datum, Zahl und Einheit mit geschuetztem Leerzeichen --
+// auf dem iPhone brach "70 / h" sonst um.
+function brWdDay(ds){
+  var d=localDay(ds);
+  return isNaN(d.getTime())?brDay(ds):(BR_WD[d.getDay()]+"\u00a0"+brDay(ds));
+}
+function brLongDate(ds){
+  var d=localDay(ds);
+  if(isNaN(d.getTime()))return String(ds||"");
+  return BR_WDL[d.getDay()]+", "+d.getDate()+". "+BR_MON[d.getMonth()];
+}
+// Letzter Tag eines Fensters von n Arbeitstagen ab ds (ds zaehlt mit, wenn es
+// ein Werktag ist). Feiertage zaehlen hier mit -- das Fenster ist eine
+// Kalenderangabe, die Kapazitaet rechnet getrennt.
+function brWorkdayEnd(ds,n){
+  var d=localDay(ds),cnt=0,g=0,last=ds;
+  if(isNaN(d.getTime()))return ds;
+  while(cnt<n&&g++<60){
+    if(!isWE(d)){cnt++;last=dateStr(d);}
+    d.setDate(d.getDate()+1);
+  }
+  return last;
+}
+// "Heute schon gezeigt" je Person -- ueber eine Pruefsumme des Namens, damit
+// nicht noch eine Namensliste im Klartext im Speicher liegt.
+function brNameKey(name){
+  var s=String(name||"").trim().toLowerCase(),h=5381;
+  for(var i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(i))|0;
+  return "n"+(h>>>0).toString(36);
+}
+function brSeenMap(){
+  try{
+    var m=JSON.parse(localStorage.getItem(BRIEF_SEEN_KEY)||"{}");
+    return (m&&typeof m==="object"&&!Array.isArray(m))?m:{};
+  }catch(e){return {};}
+}
+function briefSeenToday(name,today){return brSeenMap()[brNameKey(name)]===today;}
+function markBriefSeen(name,today){
+  var m=brSeenMap();
+  m[brNameKey(name)]=today;
+  var ks=Object.keys(m);
+  if(ks.length>10){
+    ks.sort(function(a,b){return String(m[a])<String(m[b])?-1:1;});
+    ks.slice(0,ks.length-10).forEach(function(k){delete m[k];});
+  }
+  try{localStorage.setItem(BRIEF_SEEN_KEY,JSON.stringify(m));}catch(e){}
+}
+
+// Baut das Briefing. Reine Funktion -- alles kommt ueber o herein:
+//   today, me (erkannter MA oder null), named (Name eingegeben?),
+//   releases (angezeigte, also activeReleases), analysis (capEnd je WI),
+//   loadMap, absMap (Abwesenheitskarte inkl. Feiertage), absences (gemeldet),
+//   holidayMap, lastImport, canSeeAll, employees, scenName.
+function buildBriefing(o){
+  o=o||{};
+  var T=o.today||dateStr(new Date());
+  var h5=brWorkdayEnd(T,5),h10=brWorkdayEnd(T,10);
+  var li=String(o.lastImport||"");
+  var out={today:T,h5:h5,h10:h10,dateLabel:brLongDate(T),me:!!o.me,
+    lastImport:li,stale:li!==T,stats:[],items:[],pkgs:{}};
+  var I=out.items;
+  if(out.stale){
+    var age=li?Math.round((localDay(T)-localDay(li))/864e5):null;
+    I.push({k:"daten",sev:"amber",wis:[],go:{t:"import"},
+      text:li
+        ? "Letzter Import vom "+brDay(li)+(age===1?" (gestern)":age>1?" (vor "+age+" Tagen)":"")+
+          " — Termine und Reststunden können sich in ClearQuest geändert haben."
+        : "Noch keine Daten importiert."});
+  }
+  if(o.scenName){
+    I.push({k:"szenario",sev:"info",wis:[],go:{t:"view",v:"szenarien"},
+      text:"Szenario „"+o.scenName+"“ ist aktiv — Prognosen, Ampeln und Überlast rechnen mit seinen Annahmen."});
+  }
+  var me=o.me;
+  if(!me){
+    if(o.named)I.push({k:"name",sev:"info",wis:[],go:null,
+      text:"Dein Name ist keinem Mitarbeiter zugeordnet — deshalb kein persönliches Briefing."});
+    return out;
+  }
+  // Eigene Workitems, aufbereitet wie allPkgs (rn/cn fuer das Bearbeiten-Fenster)
+  var capOf={};
+  (o.analysis||[]).forEach(function(a){if(a&&a.pkg)capOf[a.pkg.id]=a.capEnd||a.pkg.end;});
+  var all=[],byId={};
+  (o.releases||[]).forEach(function(r){
+    function add(p,c){
+      if(!p||!p.id)return;
+      var q=Object.assign({},p,{releaseId:r.id,componentId:c?c.id:null,rc:r.color,rn:r.name,cn:c?(c.name||""):"",
+        fcDueDate:c?(c.dueDate||""):"",bcDueDate:r.dueDate||""});
+      all.push(q);byId[q.id]=q;
+    }
+    (r.directPackages||[]).forEach(function(p){add(p,null);});
+    (r.components||[]).forEach(function(c){(c.packages||[]).forEach(function(p){add(p,c);});});
+  });
+  function rem(p){var v=(p.remainingHours!=null&&p.remainingHours>=0)?p.remainingHours:p.hours;return Number(v)||0;}
+  function hrs(h){return String(Math.round(h*10)/10).replace(".",",")+"\u00a0h";}
+  function ref(p,note,warn){return {id:String(p.id),label:wiLabel(p.title,p.rn,p.cn)||String(p.id),
+    title:String(p.title||""),note:note||"",warn:!!warn};}
+  function byStart(a,b){return String(a.start)<String(b.start)?-1:String(a.start)>String(b.start)?1:0;}
+  function byEnd(a,b){return String(a.end)<String(b.end)?-1:String(a.end)>String(b.end)?1:0;}
+  var open=all.filter(function(p){return p.employee===me.id&&p.lcs!=="closed";});
+  open.forEach(function(p){out.pkgs[p.id]=p;});
+  var mine=open.filter(function(p){return countsForEffort(p)&&rem(p)>0;});
+  var hpd=dailyCapacity(me),absMe=(o.absMap&&o.absMap[me.id])||{};
+  function netH(from,to){
+    var d=localDay(from),e=localDay(to),h=0,g=0;
+    while(d<=e&&g++<400){if(!isWE(d)&&!absMe[dateStr(d)])h+=hpd;d.setDate(d.getDate()+1);}
+    return h;
+  }
+  function late(p){var ce=capOf[p.id];return (ce&&p.end&&ce>p.end)?ce:"";}
+
+  var ueber=mine.filter(function(p){return p.end&&p.end<T;}).sort(byEnd);
+  var heute=mine.filter(function(p){return p.start===T;}).sort(byEnd);
+  var bald=mine.filter(function(p){return p.start>T&&p.start<=h5;}).sort(byStart);
+  var faellig=mine.filter(function(p){return p.end>=T&&p.end<=h5;}).sort(byEnd);
+  var fH=faellig.reduce(function(a,p){return a+rem(p);},0),fCap=netH(T,h5);
+  var fLate=faellig.filter(function(p){return !!late(p);});
+  var fRed=fH>fCap+0.01||fLate.length>0;
+
+  // Business Cases, an denen ich beteiligt bin -- Ampel wie Radar und M6
+  var bcs=[];
+  (o.releases||[]).forEach(function(r){
+    var wis=all.filter(function(p){return p.releaseId===r.id&&p.lcs!=="closed";});
+    if(!wis.some(function(p){return p.employee===me.id;}))return;
+    var pred="",crit=null;
+    wis.forEach(function(p){var ce=capOf[p.id]||p.end||"";if(ce>pred){pred=ce;crit=p;}});
+    var amp=bcAmpel(r.dueDate,pred);
+    if(amp!=="red"&&amp!=="amber")return;
+    bcs.push({r:r,pred:pred,amp:amp,d:workdaysBetween2(r.dueDate,pred),crit:crit});
+  });
+  bcs.sort(function(a,b){return (a.amp===b.amp)?(b.d-a.d):(a.amp==="red"?-1:1);});
+
+  // Wartet auf einen offenen Vorgaenger (Start bis h10)
+  var blocked=[];
+  mine.filter(function(p){return p.start&&p.start<=h10;}).forEach(function(p){
+    var q=null,qe="";
+    (p.dependencies||[]).forEach(function(id){
+      var d=byId[id];if(!d||d.lcs==="closed")return;
+      var e=capOf[d.id]||d.end||"";
+      if(e&&e>=p.start&&e>qe){q=d;qe=e;}
+    });
+    if(q)blocked.push({p:p,q:q,qe:qe});
+  });
+
+  // Ueberlast bis h10: Lastkarte gegen Tageskapazitaet, Abwesenheit zaehlt nicht
+  var lm=(o.loadMap&&o.loadMap[me.id])||{},ol=[],peak=null;
+  (function(){
+    var d=localDay(T),e=localDay(h10),g=0;
+    while(d<=e&&g++<40){
+      var k=dateStr(d);
+      if(!isWE(d)&&!absMe[k]){
+        var l=lm[k]||0;
+        if(l>hpd+0.01){ol.push(k);if(!peak||l>peak.l)peak={k:k,l:l};}
+      }
+      d.setDate(d.getDate()+1);
+    }
+  })();
+
+  // Abwesenheiten (gemeldet) und Feiertage bis h10
+  var abw=[];
+  (o.absences||[]).forEach(function(ab){
+    if(!ab||!ab.start||!ab.end)return;
+    var own=ab.employee===me.id||String(ab.employeeName||"").trim().toLowerCase()===String(me.name||"").trim().toLowerCase();
+    if(!own||ab.end<T||ab.start>h10)return;
+    abw.push({s:ab.start,t:getAbsenceType(ab.type).label+" "+(ab.start===ab.end?brWdDay(ab.start):brWdDay(ab.start)+"–"+brWdDay(ab.end))});
+  });
+  Object.keys(o.holidayMap||{}).forEach(function(k){
+    if(k<T||k>h10||isWE(localDay(k)))return;
+    abw.push({s:k,t:"Feiertag "+o.holidayMap[k]+" "+brWdDay(k)});
+  });
+  abw.sort(function(a,b){return a.s<b.s?-1:a.s>b.s?1:0;});
+
+  // Saetze, nach Dringlichkeit
+  if(ueber.length)I.push({k:"ueber",sev:"red",go:{t:"view",v:"umplanung"},
+    text:(ueber.length===1?"1 Workitem":ueber.length+" Workitems")+" über dem Planende, "+
+      hrs(ueber.reduce(function(a,p){return a+rem(p);},0))+" offen:",
+    wis:ueber.map(function(p){return ref(p,"seit "+brDay(p.end),true);})});
+  if(heute.length)I.push({k:"start",sev:"info",go:{t:"view",v:"auslastung",mode:"ma"},
+    text:"Heute startet:",wis:heute.map(function(p){return ref(p,"");})});
+  if(faellig.length)I.push({k:"faellig",sev:fRed?"red":"amber",go:{t:"view",v:"umplanung"},
+    text:"Fällig bis "+brWdDay(h5)+":",
+    wis:faellig.map(function(p){var l=late(p);return ref(p,l?"Prognose "+brDay(l):"",!!l);}),
+    after:"\u2014\u00a0"+hrs(fH)+" offen bei "+hrs(fCap)+" verfügbarer Zeit"+(fH>fCap+0.01?", das geht nicht auf.":".")});
+  bcs.forEach(function(b){
+    var mineCrit=!!(b.crit&&b.crit.employee===me.id);
+    I.push({k:"bc-"+b.r.id,sev:b.amp,go:{t:"view",v:"bcplanung"},
+      text:b.r.name+" steht auf "+(b.amp==="red"?"Rot":"Gelb")+": Prognose "+brDay(b.pred)+", Ziel "+brDay(b.r.dueDate)+
+        (b.amp==="red"?" (+"+b.d+"\u00a0AT)":" ("+(-b.d)+"\u00a0AT Puffer)")+(mineCrit?" — sie hängt an deinem":"."),
+      wis:mineCrit?[ref(b.crit,"")]:[]});
+  });
+  blocked.forEach(function(x){
+    var who="Kollege";
+    if(x.q.employee===me.id)who="eigenes";
+    else if(o.canSeeAll){var qe=(o.employees||[]).filter(function(e){return e.id===x.q.employee;})[0];if(qe)who=qe.name;}
+    I.push({k:"block-"+x.p.id,sev:"amber",go:{t:"view",v:"umplanung"},text:"",wis:[ref(x.p,"")],
+      after:"wartet auf "+x.q.id+" "+(x.q.title||"")+" ("+who+"), voraussichtlich fertig "+brWdDay(x.qe)+
+        " — dein Start "+brWdDay(x.p.start)});
+  });
+  if(ol.length)I.push({k:"last",sev:"red",go:{t:"view",v:"auslastung",mode:"ma"},wis:[],
+    text:(ol.length===1?"1 Tag":ol.length+" Tage")+" über Kapazität bis "+brWdDay(h10)+
+      " — Spitze "+hrs(peak.l)+" bei "+hrs(hpd)+" am "+brWdDay(peak.k)});
+  if(bald.length)I.push({k:"bald",sev:"info",go:{t:"view",v:"auslastung",mode:"ma"},
+    text:"Startet bis "+brWdDay(h5)+":",wis:bald.map(function(p){return ref(p,brWdDay(p.start));})});
+  if(abw.length)I.push({k:"abw",sev:"info",go:{t:"view",v:"mitarbeiter"},wis:[],
+    text:"Bis "+brWdDay(h10)+" nicht verfügbar: "+abw.map(function(a){return a.t;}).join(" · ")});
+  if(!(ueber.length+heute.length+faellig.length+bcs.length+blocked.length+ol.length))
+    I.push({k:"ok",sev:"ok",go:null,wis:[],
+      text:mine.length?("Nichts Dringendes bis "+brWdDay(h5)+": kein Start, keine Fälligkeit, kein Engpass.")
+                      :"Keine offenen Workitems auf deinen Namen."});
+
+  var bcRed=bcs.filter(function(b){return b.amp==="red";}).length;
+  out.stats=[
+    {k:"start",n:heute.length,label:"starten heute",sev:heute.length?"info":""},
+    {k:"faellig",n:faellig.length,label:"fällig bis "+brWdDay(h5),sev:faellig.length?(fRed?"red":"amber"):""},
+    {k:"ueber",n:ueber.length,label:"überfällig",sev:ueber.length?"red":""},
+    {k:"bc",n:bcs.length,label:bcs.length===1?"BC gelb/rot":"BCs gelb/rot",sev:bcRed?"red":bcs.length?"amber":""},
+    {k:"last",n:ol.length,label:ol.length===1?"Tag Überlast":"Tage Überlast",sev:ol.length?"red":""}
+  ];
+  return out;
+}
+if(typeof window!=="undefined"){
+  window.buildBriefing=buildBriefing;window.brWorkdayEnd=brWorkdayEnd;window.brNameKey=brNameKey;
+  window.briefSeenToday=briefSeenToday;window.markBriefSeen=markBriefSeen;
+}
+
+// Kennzahlen und Saetze. EINE Komponente fuer Fenster und Kachel, damit
+// beide dasselbe sagen. Eine Zeile springt in ihre Ansicht, eine Kennung
+// oeffnet das Workitem. Zeilen sind div mit role=button, weil die Kennungen
+// darin eigene Knoepfe sind.
+function BriefingList(p){
+  var b=p.b;
+  if(!b)return null;
+  var canGo=p.canGo||function(){return true;};
+  function go(g){if(g&&canGo(g)&&p.onGo)p.onGo(g);}
+  function chip(w){
+    return React.createElement("button",{key:w.id,type:"button","data-brief-wi":w.id,
+      title:w.id+(w.title?" · "+w.title:""),
+      onClick:function(e){e.stopPropagation();go({t:"wi",id:w.id});},
+      style:{display:"inline-flex",alignItems:"baseline",gap:6,maxWidth:"100%",margin:"2px 6px 2px 0",padding:"2px 8px",
+        borderRadius:"var(--r-sm)",border:"1px solid "+A.border,background:A.surface,color:A.text,cursor:"pointer",
+        fontFamily:"var(--font-body)",fontSize:"var(--fs-sm)",lineHeight:1.5,verticalAlign:"baseline",textAlign:"left"}},
+      React.createElement("span",{style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-xs)",color:A.textMid,flexShrink:0}},w.id),
+      React.createElement("span",{style:{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:220}},w.label),
+      w.note?React.createElement("span",{style:{flexShrink:0,fontSize:"var(--fs-xs)",fontWeight:700,
+        color:w.warn?A.coralInk:A.textLight}},w.note):null);
+  }
+  var stats=(b.me&&b.stats.length)?React.createElement("div",{"data-brief-stats":"1",
+    style:{display:"flex",flexWrap:"wrap",gap:8,marginBottom:10}},
+    b.stats.map(function(s){
+      var red=s.sev==="red",amb=s.sev==="amber",inf=s.sev==="info";
+      return React.createElement("div",{key:s.k,"data-brief-stat":s.k,
+        style:{flex:"1 1 92px",minWidth:0,padding:"8px 10px",borderRadius:"var(--r-lg)",
+          border:"1px solid "+(red?A.coralLine:amb?A.amberLine:A.border),
+          background:red?A.coralLight:amb?A.amberLight:inf?A.mintLight:A.bg}},
+        React.createElement("div",{"data-brief-n":"1",style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-2xl)",fontWeight:700,lineHeight:1.05,
+          color:red?A.coralInk:amb?A.amberInk:inf?A.mintInk:A.textLight}},String(s.n)),
+        React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textMid,marginTop:3,lineHeight:1.3}},s.label));
+    })):null;
+  var rows=b.items.map(function(it,i){
+    var g=it.go,clickable=!!(g&&canGo(g)),isData=it.k==="daten";
+    return React.createElement("div",{key:it.k,"data-brief-item":it.k,"data-import-ask":isData?"1":undefined,
+      role:clickable?"button":undefined,tabIndex:clickable?0:undefined,
+      onClick:clickable?function(){go(g);}:undefined,
+      onKeyDown:clickable?function(e){if(e.target===e.currentTarget&&(e.key==="Enter"||e.key===" ")){e.preventDefault();go(g);}}:undefined,
+      style:{display:"flex",alignItems:"flex-start",gap:10,padding:"9px 4px",cursor:clickable?"pointer":"default",
+        borderTop:i===0?"none":"1px solid "+A.border}},
+      React.createElement("span",{"aria-hidden":"true",style:{width:8,height:8,borderRadius:"50%",flexShrink:0,marginTop:8,
+        background:it.sev==="red"?A.coral:it.sev==="amber"?A.amber:it.sev==="ok"?A.green:A.mint}}),
+      React.createElement("div",{style:{flex:1,minWidth:0,fontSize:"var(--fs-md)",color:A.text,lineHeight:1.65}},
+        it.text?React.createElement("span",{style:{marginRight:6}},it.text):null,
+        (it.wis||[]).map(chip),
+        it.after?React.createElement("span",null,it.after):null,
+        isData?React.createElement("div",{style:{marginTop:6}},
+          React.createElement("button",{type:"button","data-import-now":"1",
+            onClick:function(e){e.stopPropagation();go({t:"import"});},
+            style:{padding:"5px 12px",borderRadius:"var(--r-md)",border:"none",background:A.mint,color:A.onMint,
+              fontSize:"var(--fs-sm)",fontWeight:700,cursor:"pointer"}},"Jetzt importieren")):null),
+      clickable?React.createElement("span",{"aria-hidden":"true",style:{flexShrink:0,color:A.textLight,
+        fontSize:"var(--fs-lg)",lineHeight:1.3}},"›"):null);
+  });
+  return React.createElement("div",{"data-brief-list":"1"},stats,React.createElement("div",null,rows));
+}
+
+// Das Fenster nach der Anmeldung. Escape und ein Tipp daneben schliessen es.
+function BriefingOverlay(p){
+  var closeRef=useRef(null);
+  var onCloseRef=useRef(p.onClose);
+  onCloseRef.current=p.onClose;
+  useEffect(function(){
+    function onKey(e){if(e.key==="Escape"){e.preventDefault();onCloseRef.current();}}
+    window.addEventListener("keydown",onKey);
+    try{if(closeRef.current)closeRef.current.focus();}catch(e){}
+    return function(){window.removeEventListener("keydown",onKey);};
+  },[]);
+  var b=p.b;
+  return React.createElement("div",{"data-brief-window":"1",onClick:function(){onCloseRef.current();},
+    style:{position:"fixed",inset:0,background:"rgb(var(--c-ink-rgb) / 0.45)",zIndex:411,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
+    React.createElement("div",{className:"glass-modal",role:"dialog","aria-modal":"true","aria-labelledby":"brief-title",
+      onClick:function(e){e.stopPropagation();},
+      style:{background:A.surface,borderRadius:"var(--r-xl)",width:580,maxWidth:"100%",maxHeight:"88vh",
+        display:"flex",flexDirection:"column",overflow:"hidden",boxShadow:"0 20px 60px rgb(var(--c-ink-rgb) / 0.18)"}},
+      React.createElement("div",{style:{padding:"20px 22px 10px",flexShrink:0}},
+        React.createElement("div",{className:"wb-eyebrow",style:{fontSize:"var(--fs-2xs)",color:A.textLight,textTransform:"uppercase"}},
+          "Heute · "+b.dateLabel),
+        React.createElement("div",{id:"brief-title",style:{fontSize:"var(--fs-2xl)",fontWeight:800,color:A.text,marginTop:6}},
+          p.greet||"Moin"),
+        React.createElement("div",{style:{fontSize:"var(--fs-md)",color:A.textMid,marginTop:2}},
+          b.me?"Das steht an — ein Tipp auf eine Zeile führt hin.":"Bevor es losgeht:")),
+      React.createElement("div",{style:{flex:1,minHeight:0,overflowY:"auto",padding:"4px 22px 6px"}},
+        React.createElement(BriefingList,{b:b,onGo:p.onGo,canGo:p.canGo})),
+      React.createElement("div",{style:{flexShrink:0,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",
+        padding:"12px 22px 18px",borderTop:"1px solid "+A.border}},
+        React.createElement("div",{style:{flex:"1 1 160px",minWidth:0,fontSize:"var(--fs-xs)",color:A.textLight}},
+          (b.lastImport?"Datenstand "+brDay(b.lastImport):"Ohne Datenstand")+
+          (b.me?" · auch als Kachel „Heute“ im Dashboard":"")),
+        React.createElement("button",{ref:closeRef,type:"button","data-brief-close":"1","data-import-later":"1",
+          onClick:function(){onCloseRef.current();},
+          style:{padding:"9px 18px",borderRadius:"var(--r-md)",border:"none",background:A.mint,color:A.onMint,
+            fontSize:"var(--fs-md)",fontWeight:700,cursor:"pointer"}},"Zum Dashboard"))));
+}
+
 // ══════════════════════════════════════════════════════════
 function Planungstool(){
   var s_sideOpen=useState(function(){try{return window.innerWidth>=768;}catch(_){return true;}}); var sideOpen=s_sideOpen[0],setSideOpen=s_sideOpen[1]; // v2.39.0: mobil default eingeklappt
@@ -5935,8 +6299,16 @@ function Planungstool(){
     // v2.75.0: Stammt der letzte Import nicht von heute, einmal nachfragen.
     // Taeglich statt woechentlich, weil sich Reststunden in ClearQuest
     // taeglich aendern -- ein Plan von gestern ist bereits ungenau.
+    // v2.98.0: Daraus ist das Briefing geworden. Es kommt einmal am Tag je
+    // Person -- und bei jedem Start, solange der Import nicht von heute ist
+    // (dann mit der Datenstand-Zeile oben). Ohne Namen bleibt es aus.
     try{
-      if(lastImport!==dateStr(new Date()))setTimeout(function(){setImportAsk(true);},600);
+      var today0=dateStr(new Date()),me0=matchEmployeeByName(n,employees);
+      var fresh0=!!(me0&&!briefSeenToday(me0.name,today0));
+      if(fresh0||lastImport!==today0)setTimeout(function(){
+        if(me0)markBriefSeen(me0.name,today0);
+        setBriefOpen(true);
+      },600);
     }catch(e){}
     var next=pushRecentName(recentNames,n);
     setRecentNames(next);
@@ -6190,7 +6562,9 @@ function Planungstool(){
     try{localStorage.setItem(LAST_IMPORT_KEY,JSON.stringify(d));}catch(e){}
     s_lastImport[1](d);
   }
-  var s_importAsk=useState(false); var importAsk=s_importAsk[0],setImportAsk=s_importAsk[1];
+  // v2.98.0: Briefing-Fenster. Die Import-Erinnerung (importAsk, v2.75.0) ist
+  // darin aufgegangen -- als Datenstand-Zeile mit "Jetzt importieren".
+  var s_briefOpen=useState(false); var briefOpen=s_briefOpen[0],setBriefOpen=s_briefOpen[1];
 
   var s_timeCfg=useState(function(){
     var v=lsLoad(TIME_CFG_KEY,null);
@@ -6856,6 +7230,30 @@ function Planungstool(){
     });
     return buildLoadMap(all,employees,dateStr(new Date()),{chargePast:true});
   },[activeReleases,employees]);
+  // ── v2.98.0: Briefing ──────────────────────────────────────────────
+  // Steht HINTER analysis, loadMap und absenceMap -- weiter oben waeren sie
+  // per Hoisting undefined (v2.20.11). Das Datum kommt je Render herein,
+  // damit das Briefing nach Mitternacht nicht am Vortag haengt.
+  var briefToday=dateStr(new Date());
+  var briefing=useMemo(function(){
+    if(dashUser===null)return null;
+    return buildBriefing({today:briefToday,me:selfEmp,named:!!dashUser,releases:activeReleases,
+      analysis:analysis,loadMap:loadMap,absMap:absenceMap,absences:absences,holidayMap:holidayMap,
+      lastImport:lastImport,canSeeAll:canSeeAll,employees:employees,
+      scenName:activeScen?(activeScen.name||"Szenario"):""});
+  },[briefToday,dashUser,selfEmp,activeReleases,analysis,loadMap,absenceMap,absences,holidayMap,lastImport,canSeeAll,employees,activeScen]);
+  function briefCanGo(g){return !!g&&(g.t!=="view"||viewAllowed(g.v));}
+  function briefGo(g){
+    if(!briefCanGo(g))return;
+    setBriefOpen(false);
+    if(g.t==="import"){setModal("import");return;}
+    if(g.t==="wi"){
+      var pk=briefing&&briefing.pkgs[g.id];
+      if(pk){setEditPkg(pk);setModal("editPkg");}
+      return;
+    }
+    if(g.t==="view"){if(g.mode)setAuslMode(g.mode);setView(g.v);}
+  }
   var replanCount=analysis.filter(function(r){return r.status==="replan";}).length;
   var pufferCount=analysis.filter(function(r){return r.status==="puffer";}).length;
   var gainCount=analysis.filter(function(r){return r.endShifted;}).length;
@@ -7082,6 +7480,10 @@ function Planungstool(){
         {id:"V-10",p:"S",t:"Funk",r:"EditPkgModal: Start- und Enddatum per Date-Picker editierbar. updatePkgDates() aktualisiert State + propagateDependencies. Umplanungsvorschlag aus analysis wird angezeigt.",v:"updatePkgDates Funktion vorhanden; editStart/editEnd State im Modal",tc:"[Manuell]"},
         {id:"V-11",p:"S",t:"Funk",r:"Abhängigkeitspfeile (DepArrows): Farbe = Release-Farbe des Ziel-Pakets. Farbiger Marker-Pfeil pro Farbe. Durchgezogen (kein Strich).",v:"uniqueColors + farbige Marker in SVG defs",tc:"[Auto]"},
         {id:"V-12",p:"M",t:"Funk",r:"Kalenderwochen werden nach ISO 8601 beschriftet (Donnerstagsregel, isoWeek). kwNum ist nur noch ein Verweis darauf.",v:"12.10.2026 = KW 42; 29.12.2025 = KW 1",tc:"V3-KW-1 [Auto]"},
+        {id:"V-13",p:"M",t:"Funk",r:"Briefing nach der Anmeldung: einmal am Tag je Person ein Fenster mit Kennzahlen (starten heute, faellig in 5 AT, ueberfaellig, BCs gelb/rot, Tage Ueberlast) und kurzen Saetzen, was ansteht. Danach dieselbe Liste als Kachel M0 „Heute“ oben im Dashboard.",v:"buildBriefing, BriefingOverlay, Kachel M0, ptool_brief_seen",tc:"BR-A-1..5 [Auto]"},
+        {id:"V-14",p:"M",t:"Funk",r:"Das Briefing rechnet offline aus vorhandenen Daten: Analyse (Prognose), Lastkarte, Abwesenheitskarte mit Feiertagen. Horizonte tragen ihr Datum: 5 AT fuer Start und Faelligkeit, 10 AT fuer Ueberlast, wartende Vorgaenger und Abwesenheiten. Workitems unter nicht freigegebenen Issues zaehlen nicht.",v:"brWorkdayEnd, countsForEffort",tc:"BR-B-1..7 [Auto]"},
+        {id:"V-15",p:"S",t:"Funk",r:"Jede Zeile des Briefings fuehrt in die passende Ansicht (Umplanung, Termin-Radar, Zeitstrahl, Mitarbeiter, Import); eine Workitem-Kennung oeffnet das Workitem.",v:"briefGo",tc:"BR-C-1..5 [Auto]"},
+        {id:"V-16",p:"M",t:"Funk",r:"Sichtschutz im Briefing: nur eigene Workitems. Ein fremder Vorgaenger erscheint mit Kennung und Titel; der Name nur in der erweiterten Ansicht, sonst „Kollege“.",v:"buildBriefing (canSeeAll)",tc:"BR-D-1..3 [Auto]"},
       ]},
       {id:"G",title:"5. Gantt-Darstellung",col:A.coral,items:[
         {id:"G-10",p:"M",t:"Funk",r:"Workitems lassen sich im Gantt waagerecht per Drag and Drop verschieben. Losgelassen wird nur der Start gesetzt; Ende, Abwesenheiten und Abhaengigkeiten rechnet updatePkgDates neu.",v:"movePkgTo -> updatePkgDates",tc:"D-A-* [Auto]"},
@@ -7187,7 +7589,7 @@ function Planungstool(){
         {id:"ACC-02",p:"M",t:"Funk",r:"Der Code 1404 schaltet die erweiterte Ansicht frei. Sie wird NICHT gespeichert und bei jedem Start neu abgefragt.",v:"extView ohne Persistenz",tc:"S-B-1..5 [Auto]"},
         {id:"ACC-03",p:"M",t:"Annahme",r:"Das ist ein Sichtschutz gegen versehentliches Mitlesen, KEIN Zugriffsschutz. Der Code steht im Klartext in der Datei und muss es -- ohne Server gibt es niemanden, der pruefen koennte. Der Dialog benennt das ausdruecklich.",v:"EXT_CODE, Hinweistext",tc:"S-F-1/2 [Auto]"},
         {id:"ACC-04",p:"M",t:"Annahme",r:"Beschraenkt wird nur die DARSTELLUNG. Kapazitaetsrechnung, Umbuchung und Simulation nutzen weiterhin alle Mitarbeiter -- sonst waeren die Ergebnisse falsch.",v:"computeUmbuchung ohne visibleEmployees",tc:"S-F-3 [Auto]"},
-        {id:"ACC-05",p:"S",t:"Funk",r:"Stammt der letzte Import nicht von heute, fragt die Anwendung nach der Anmeldung einmal nach neuen Daten. Ohne Anmeldung wird nicht gefragt.",v:"ptool_last_import",tc:"S-E-1..6 [Auto]"},
+        {id:"ACC-05",p:"S",t:"Funk",r:"Stammt der letzte Import nicht von heute, erscheint nach der Anmeldung bei jedem Start das Briefing mit der Datenstand-Zeile oben und dem Knopf Jetzt importieren (seit v2.98.0; vorher ein eigener Dialog). Ohne Anmeldung wird nicht gefragt.",v:"ptool_last_import",tc:"S-E-1..6 [Auto]"},
         {id:"REP-06",p:"S",t:"Funk",r:"Zeiten lassen sich als XLSX exportieren. CSV und XLSX kommen aus einer Quelle; im XLSX steht die Dauer als echte Zahl, im CSV mit deutschem Dezimalkomma.",v:"timeExportRows",tc:"X-A-*, X-B-* [Auto]"},
         {id:"REP-07",p:"S",t:"Funk",r:"Fehlt die XLSX-Bibliothek, erscheint ein Hinweis auf den CSV-Weg statt eines Absturzes.",v:"Pruefung auf XLSX.utils",tc:"X-A-7 [Auto]"},
         {id:"REP-08",p:"S",t:"Funk",r:"Dashboard-Kachel M13 zeigt die erfasste Zeit fuer heute, diese Woche und diesen Monat, getrennt nach abrechenbar und intern.",v:"Card M13",tc:"X-C-1..5 [Auto]"},
@@ -7341,6 +7743,15 @@ function Planungstool(){
       {id:"DB-04",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Unbekannte Keys verworfen",c:"order enthaelt X9",e:"X9 nicht in order"},
       {id:"DB-05",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Layout persistiert",c:"ptool_dash_cards",e:"localStorage-Write vorhanden"},
       {id:"DB-06",g:"Dashboard",ty:"Manuell",s:"Offen",r:"Auswahl ueberlebt Reload",c:"Kacheln abwaehlen, F5",e:"Auswahl unveraendert"},
+      // v2.98.0 – Briefing
+      {id:"BR-A-1",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Briefing-Fenster nach der Anmeldung",c:"Anna meldet sich am 12.10. zum ersten Mal an",e:"Fenster mit Kennzahlen und Saetzen"},
+      {id:"BR-A-2",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Einmal am Tag je Person",c:"zweiter Start am selben Tag, Import von heute",e:"kein Fenster, Kachel M0 oben im Dashboard"},
+      {id:"BR-A-3",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Alter Import oeffnet es bei jedem Start",c:"zweiter Start, Import vom 09.10.",e:"Fenster mit Datenstand-Zeile, Jetzt importieren oeffnet den Import"},
+      {id:"BR-B-1",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Inhalt aus den Testdaten",c:"Anna am Mo 12.10.",e:"2 starten heute, 2 faellig bis Fr 16.10. (70 h bei 35 h), BC 1.0.0 gelb, WI-A1 wartet auf WI-Z1, Ueberlast bis Fr 23.10."},
+      {id:"BR-C-1",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Kennung oeffnet das Workitem",c:"WI-A2 im Briefing antippen",e:"Bearbeiten-Fenster von WI-A2, Briefing zu"},
+      {id:"BR-C-2",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Zeile springt in ihre Ansicht",c:"BC-Zeile, Ueberlast-Zeile, Vorgaenger-Zeile antippen",e:"Termin-Radar, Zeitstrahl, Umplanung"},
+      {id:"BR-D-1",g:"S – Sichtschutz",ty:"Auto",s:"Bestanden",r:"Kein fremder Name im Briefing",c:"gesperrt, Vorgaenger gehoert Zwiebelfisch",e:"Kennung und Titel, Name als Kollege"},
+      {id:"BR-E-1",g:"T – Technisch",ty:"Auto",s:"Bestanden",r:"Briefing ohne Netz",c:"Start im Browser mit gesperrtem Netz",e:"keine Anfrage nach aussen, Fenster erscheint"},
       {id:"DS-01",g:"Darstellung",ty:"Auto",s:"Bestanden",r:"WI ohne Datum erzeugt kein NaN",c:"toX('',units,cw)",e:"0 statt NaN"},
       {id:"DS-02",g:"Darstellung",ty:"Auto",s:"Bestanden",r:"Unlesbares Datum abgefangen",c:"toX('kaputt',...)",e:"0 statt NaN"},
       {id:"DS-03",g:"Darstellung",ty:"Auto",s:"Bestanden",r:"barW ohne Datum liefert Mindestbreite",c:"barW('','',30)",e:">=4"},
@@ -7491,7 +7902,7 @@ function Planungstool(){
       {id:"S-C-1b",g:"F – Filter & Navigation",ty:"Auto",s:"Bestanden",r:"FC-Zeile rechnet nur eigenen Aufwand",c:"BC-Sicht mit je 30 h von zwei Mitarbeitern",e:"30h Bedarf statt 60h"},
       {id:"S-D-1",g:"F – Filter & Navigation",ty:"Auto",s:"Bestanden",r:"Bericht ist ohne Freischaltung gesperrt",c:"Bericht als erkannter Mitarbeiter oeffnen",e:"Sperrhinweis, keine fremden Namen"},
       {id:"S-B-5",g:"F – Filter & Navigation",ty:"Auto",s:"Bestanden",r:"Freischaltung ueberdauert die Sitzung nicht",c:"Freischalten, localStorage pruefen",e:"Kein Schluessel dazu abgelegt"},
-      {id:"S-E-2",g:"F – Filter & Navigation",ty:"Auto",s:"Bestanden",r:"Import von gestern loest die Nachfrage aus",c:"Anmelden mit Import von gestern",e:"Dialog mit Datum, Spaeter und Jetzt importieren"},
+      {id:"S-E-2",g:"F – Filter & Navigation",ty:"Auto",s:"Bestanden",r:"Import von gestern loest die Nachfrage aus",c:"Anmelden mit Import von gestern",e:"Briefing mit Datenstand-Zeile (Datum), Jetzt importieren und Zum Dashboard"},
       // v2.74.0 – Kleine Erweiterungen
       {id:"X-A-4",g:"D – Datenmodell",ty:"Auto",s:"Bestanden",r:"XLSX enthaelt echte Zahlen",c:"Buchung ueber 8:30 h exportieren",e:"Dauer_h ist die Zahl 8.5, nicht der Text \"8,50\""},
       {id:"X-A-7",g:"D – Datenmodell",ty:"Auto",s:"Bestanden",r:"Fehlende Bibliothek fuehrt nicht zum Absturz",c:"XLSX nicht geladen, Export ausloesen",e:"Hinweis auf den CSV-Weg"},
@@ -11700,6 +12111,10 @@ function Planungstool(){
 
       return React.createElement("div",{className:"dash-grid",style:GRID},
 
+        // v2.98.0: Briefing -- dieselbe Liste wie das Fenster nach der Anmeldung.
+        Card({tag:"M0",title:"Heute · "+brWdDay(todayStr),wide:true},
+          React.createElement(BriefingList,{b:briefing,onGo:briefGo,canGo:briefCanGo})),
+
         Card({tag:"M1",title:"Woran ich gerade arbeite"},
           laufend.length?laufend.slice(0,5).map(function(p,i){
             return React.createElement(Row,{key:p.id,first:i===0,left:p.cqId||"",
@@ -15745,29 +16160,10 @@ function Planungstool(){
         )
       )
     ),
-    importAsk&&React.createElement("div",{"data-import-ask":"1",
-      style:{position:"fixed",inset:0,background:"rgb(var(--c-ink-rgb) / 0.45)",zIndex:411,
-        display:"flex",alignItems:"center",justifyContent:"center"}},
-      React.createElement("div",{className:"glass-modal",style:{background:A.surface,borderRadius:"var(--r-xl)",padding:26,width:440,
-        maxWidth:"92vw",boxShadow:"0 20px 60px rgb(var(--c-ink-rgb) / 0.18)"}},
-        React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:12}},
-          React.createElement("span",{style:{fontSize:"var(--fs-2xl)"}},"\u2b07"),
-          React.createElement("span",{style:{color:A.text,fontWeight:700,fontSize:"var(--fs-xl)"}},"Neue Daten laden?")),
-        React.createElement("div",{style:{fontSize:"var(--fs-md)",color:A.textMid,lineHeight:1.7,marginBottom:18}},
-          lastImport
-            ? "Der letzte Import ist vom "+lastImport+". Seitdem k\u00f6nnen sich Termine und Reststunden in ClearQuest ge\u00e4ndert haben."
-            : "Es wurden noch keine Daten importiert."),
-        React.createElement("div",{style:{display:"flex",gap:8,justifyContent:"flex-end"}},
-          React.createElement("button",{"data-import-later":"1",onClick:function(){setImportAsk(false);},
-            style:{padding:"8px 16px",borderRadius:"var(--r-md)",cursor:"pointer",fontSize:"var(--fs-md)",fontWeight:700,
-              border:"1.5px solid "+A.border,background:A.surface,color:A.textMid}},"Sp\u00e4ter"),
-          React.createElement("button",{"data-import-now":"1",
-            onClick:function(){setImportAsk(false);setModal("import");},
-            style:{padding:"8px 20px",borderRadius:"var(--r-md)",cursor:"pointer",fontSize:"var(--fs-md)",fontWeight:700,
-              border:"none",background:A.mint,color:A.onMint}},"Jetzt importieren")
-        )
-      )
-    ),
+    // v2.98.0: Briefing-Fenster (ersetzt die Import-Erinnerung).
+    briefOpen&&briefing&&React.createElement(BriefingOverlay,{b:briefing,
+      greet:"Moin, "+String(selfEmp?selfEmp.name:(dashUser||"")).split(" ")[0],
+      onGo:briefGo,canGo:briefCanGo,onClose:function(){setBriefOpen(false);}}),
     scenEdit&&React.createElement(ScenarioOverlay,{
       initial:scenEdit,employees:visibleEmployees(),releases:releases, // v2.75.2
       onSave:function(sc){
