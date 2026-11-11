@@ -1243,6 +1243,7 @@ WBTor({
     "ptool_scenarios",
     "ptool_scenario_active",
     "ptool_last_import",
+    "ptool_import_diff",
     "ptool_hidden_emp",
     "ptool_hidden_rel",
     "ptool_range_start",
@@ -2548,7 +2549,20 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="2.98.0";
+var APP_VERSION="2.99.0";
+// v2.99.0: Import-Briefing -- was sich mit dem neuen Quellenmaterial geaendert
+//   hat. Beim Import vergleicht CAPLAN den bisherigen Plan mit dem neuen Stand
+//   (buildImportDiff, rein): je Workitem neu, geaendert, abgeschlossen,
+//   entfallen; geaendert = Start/Ende (+/- AT), Restaufwand, Bearbeiter,
+//   Status, Issue-Freigabe. Zuordnung ueber die Kennung, ohne feste Kennung
+//   ueber BC + Titel; Mitarbeiter ueber den Namen (Re-Import vergibt neue IDs).
+//   Fenster direkt nach dem Import, danach dieselbe Liste in der Kachel M0
+//   bis zum naechsten Import (ptool_import_diff, im Lizenztor). Je Workitem
+//   eine Zeile, Gruppen Geaendert / Neu / Abgeschlossen / Entfallen.
+//   Sicht: "Nur meine" -> nur Workitems, die vorher oder jetzt mir gehoeren,
+//   der andere Bearbeiter heisst "Kollege". "Alle Daten" -> alle eingeblendeten
+//   Mitarbeiter mit Namen. Gefiltert wird erst bei der Anzeige
+//   (viewImportDiff) -- Umschalten wirkt sofort, auch im offenen Fenster.
 // v2.98.0: Briefing -- was heute ansteht. Nach der Anmeldung einmal am Tag je
 //   Person ein Fenster, danach als Kachel M0 "Heute" oben im Dashboard. Beide
 //   zeigen dieselbe Liste (BriefingList): oben Kennzahlen (starten heute,
@@ -5901,6 +5915,254 @@ function BriefingOverlay(p){
             fontSize:"var(--fs-md)",fontWeight:700,cursor:"pointer"}},"Zum Dashboard"))));
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// v2.99.0 — IMPORT-BRIEFING: was sich mit dem neuen Quellenmaterial geaendert hat
+//
+// Beim Laden einer neuen Quelle vergleicht CAPLAN den bisherigen Plan mit dem
+// neuen Stand -- je Workitem: neu, geaendert, abgeschlossen, entfallen.
+// Geaendert heisst: Start oder Ende (mit +/- AT), Restaufwand, Bearbeiter,
+// Status (lcs) oder Freigabe des Issues (issueLcs). Entscheidung Maik 11.11.:
+// Fenster direkt nach dem Import, dieselbe Liste bleibt bis zum naechsten
+// Import in der Kachel M0; je Workitem eine Zeile.
+// Zuordnung alt -> neu ueber die Kennung (CQ-ID); traegt der Import keine
+// festen Kennungen (Vorlage mit uid()), ueber BC + Titel. Mitarbeiter ueber
+// den NAMEN -- ein Re-Import vergibt neue Mitarbeiter-IDs.
+// buildImportDiff ist rein und speichert ALLE Zeilen (ptool_import_diff, im
+// Lizenztor). Gefiltert wird erst bei der Anzeige (viewImportDiff):
+//   Nur meine     -> nur Workitems, die vorher oder jetzt mir gehoeren;
+//                    der andere Bearbeiter heisst "Kollege".
+//   Alle Daten    -> alle eingeblendeten Mitarbeiter (Filter "ausgeblendet"
+//                    wirkt), mit Namen.
+// ══════════════════════════════════════════════════════════════════════
+var IMPORT_DIFF_KEY="ptool_import_diff";
+function idFlat(rels,emps){
+  var nm={},out=[];
+  (emps||[]).forEach(function(e){if(e&&e.id!=null)nm[e.id]=String(e.name||"").trim();});
+  (rels||[]).forEach(function(r){
+    if(!r)return;
+    function add(p,c){
+      if(!p)return;
+      var rem=(p.remainingHours!=null&&p.remainingHours>=0)?p.remainingHours:p.hours;
+      out.push({id:String(p.id==null?"":p.id),title:String(p.title||""),rn:String(r.name||""),cn:c?String(c.name||""):"",
+        emp:(p.employee&&nm[p.employee]!=null)?nm[p.employee]:"",start:String(p.start||""),end:String(p.end||""),
+        rem:Math.round((Number(rem)||0)*10)/10,lcs:String(p.lcs||"").toLowerCase(),iss:String(p.issueLcs||"").toLowerCase()});
+    }
+    (r.directPackages||[]).forEach(function(p){add(p,null);});
+    (r.components||[]).forEach(function(c){(c&&c.packages||[]).forEach(function(p){add(p,c);});});
+  });
+  return out;
+}
+function idKey(x){return (x.rn+"|"+x.title).trim().toLowerCase();}
+// Rein: alter Plan + neuer Import -> {at, n, rows:[{kind,id,title,rn,cn,oldEmp,newEmp,ch}]}
+// kind: "mod" geaendert, "neu", "zu" abgeschlossen, "weg" entfallen.
+// null, wenn es nichts zu vergleichen gibt (Erstimport oder leerer Import).
+function buildImportDiff(oldRels,oldEmps,newRels,newEmps,at){
+  var A0=idFlat(oldRels,oldEmps),B0=idFlat(newRels,newEmps);
+  if(!A0.length||!B0.length)return null;
+  var aById={},aByKey={},used={},rows=[];
+  A0.forEach(function(x,i){
+    if(x.id&&aById[x.id]==null)aById[x.id]=i;
+    var k=idKey(x);(aByKey[k]=aByKey[k]||[]).push(i);
+  });
+  function closed(x){return x.lcs==="closed";}
+  function mk(kind,a,b,ch){var x=b||a;return {kind:kind,id:x.id,title:x.title,rn:x.rn,cn:x.cn,
+    oldEmp:a?a.emp:"",newEmp:b?b.emp:"",ch:ch||[]};}
+  B0.forEach(function(b){
+    var i=null;
+    if(b.id&&aById[b.id]!=null&&!used[aById[b.id]])i=aById[b.id];
+    if(i==null){var l=aByKey[idKey(b)]||[];for(var j=0;j<l.length;j++)if(!used[l[j]]){i=l[j];break;}}
+    if(i==null){if(!closed(b))rows.push(mk("neu",null,b));return;}
+    used[i]=true;
+    var a=A0[i];
+    if(closed(a)&&closed(b))return;
+    if(!closed(a)&&closed(b)){rows.push(mk("zu",a,b));return;}
+    var ch=[];
+    if(a.start&&b.start&&a.start!==b.start)ch.push({k:"start",a:a.start,b:b.start,d:workdaysBetween2(a.start,b.start)});
+    if(a.end&&b.end&&a.end!==b.end)ch.push({k:"ende",a:a.end,b:b.end,d:workdaysBetween2(a.end,b.end)});
+    if(Math.abs(a.rem-b.rem)>=0.05)ch.push({k:"rest",a:a.rem,b:b.rem});
+    if(a.emp!==b.emp)ch.push({k:"bearb",a:a.emp,b:b.emp});
+    // Status/Freigabe nur, wenn beide Staende sie tragen -- die Excel-Vorlage
+    // kennt kein lcs; sonst meldete jeder Wechsel CQ -> Vorlage alle WIs.
+    if(a.lcs&&b.lcs&&a.lcs!==b.lcs)ch.push({k:"status",a:a.lcs,b:b.lcs});
+    if(a.iss&&b.iss&&a.iss!==b.iss)ch.push({k:"freigabe",a:a.iss,b:b.iss});
+    if(ch.length)rows.push(mk("mod",a,b,ch));
+  });
+  A0.forEach(function(a,i){if(!used[i]&&!closed(a))rows.push(mk("weg",a,null));});
+  return {at:at||"",n:B0.length,rows:rows};
+}
+// Anzeige: filtert nach Sicht und baut die Saetze. o = {meName, canSeeAll, hidden}
+function viewImportDiff(diff,o){
+  if(!diff||!Array.isArray(diff.rows))return null;
+  o=o||{};
+  var me=String(o.meName||"").trim().toLowerCase();
+  function isMe(n){return !!me&&String(n||"").trim().toLowerCase()===me;}
+  function shown(n){return !!n&&!(o.hidden&&o.hidden[n]);}
+  var all=!!o.canSeeAll;
+  var out={at:diff.at||"",all:all,noMe:!all&&!me,groups:[],stats:[],total:0};
+  if(out.noMe)return out;
+  var vis=diff.rows.filter(function(r){
+    if(all)return shown(r.oldEmp)||shown(r.newEmp)||(!r.oldEmp&&!r.newEmp);
+    return isMe(r.oldEmp)||isMe(r.newEmp);
+  });
+  function hrs(h){return String(Math.round(h*10)/10).replace(".",",")+" h";}
+  function at(d){return d>0?"+"+d+" AT":d<0?"−"+(-d)+" AT":"±0 AT";}
+  function nm(n){return n?(all?n:(isMe(n)?"dir":"Kollege")):"niemand";}
+  var later=0;
+  var lines=vis.map(function(r){
+    var parts=[],sev="info",late=0;
+    if(r.kind==="mod")r.ch.forEach(function(c){
+      if(c.k==="start")parts.push("Start "+brDay(c.a)+"→"+brDay(c.b)+" ("+at(c.d)+")");
+      else if(c.k==="ende"){
+        parts.push("Ende "+brDay(c.a)+"→"+brDay(c.b)+" ("+at(c.d)+")");
+        if(c.d>0){late=c.d;sev="red";}
+      }
+      else if(c.k==="rest"){parts.push("Rest "+String(c.a).replace(".",",")+"→"+hrs(c.b));if(c.b>c.a&&sev!=="red")sev="amber";}
+      else if(c.k==="bearb"){
+        if(!all&&isMe(c.b))parts.push("übernommen von "+(c.a?"Kollege":"niemand"));
+        else if(!all&&isMe(c.a))parts.push("abgegeben an "+(c.b?"Kollege":"niemand"));
+        else parts.push("Bearbeiter "+(c.a||"—")+"→"+(c.b||"—"));
+        if(sev==="info")sev="amber";
+      }
+      else if(c.k==="status")parts.push("Status "+(c.a||"—")+"→"+(c.b||"—"));
+      else if(c.k==="freigabe")parts.push("Issue "+(c.a||"—")+"→"+(c.b||"—"));
+    });
+    if(late)later++;
+    var who=r.newEmp||r.oldEmp;
+    return {kind:r.kind,id:r.id,title:r.title,label:wiLabel(r.title,r.rn,r.cn)||r.title||r.id,
+      sev:r.kind==="zu"?"ok":r.kind==="weg"?"info":r.kind==="neu"?"info":sev,late:late,
+      who:all?(who||"ohne Bearbeiter"):"",text:parts.join(" · "),
+      mine:isMe(r.newEmp)};
+  });
+  var ORDER=[["mod","Geändert"],["neu","Neu"],["zu","Abgeschlossen"],["weg","Entfallen"]];
+  ORDER.forEach(function(g){
+    var L=lines.filter(function(x){return x.kind===g[0];});
+    if(g[0]==="mod")L.sort(function(a,b){
+      var s={red:0,amber:1,info:2};
+      return (s[a.sev]-s[b.sev])||(b.late-a.late)||(a.id<b.id?-1:a.id>b.id?1:0);
+    });
+    else L.sort(function(a,b){return a.id<b.id?-1:a.id>b.id?1:0;});
+    if(L.length)out.groups.push({k:g[0],label:g[1],rows:L});
+  });
+  function cnt(k){return lines.filter(function(x){return x.kind===k;}).length;}
+  out.total=lines.length;
+  out.stats=[
+    {k:"mod",n:cnt("mod"),label:"geändert",sev:cnt("mod")?"amber":""},
+    {k:"spaeter",n:later,label:"enden später",sev:later?"red":""},
+    {k:"neu",n:cnt("neu"),label:"neu",sev:cnt("neu")?"info":""},
+    {k:"zu",n:cnt("zu"),label:"abgeschlossen",sev:cnt("zu")?"ok":""},
+    {k:"weg",n:cnt("weg"),label:"entfallen",sev:cnt("weg")?"amber":""}
+  ];
+  return out;
+}
+function impWhen(at){
+  var d=new Date(at||"");
+  if(isNaN(d.getTime()))return "";
+  function p2(n){return (n<10?"0":"")+n;}
+  return brWdDay(dateStr(d))+", "+p2(d.getHours())+":"+p2(d.getMinutes());
+}
+if(typeof window!=="undefined"){
+  window.buildImportDiff=buildImportDiff;window.viewImportDiff=viewImportDiff;window.impWhen=impWhen;
+}
+
+// Liste fuer Fenster und Kachel. Eine Kennung oeffnet das Workitem (wenn es
+// noch existiert und sichtbar ist). Je Gruppe zuerst 8 Zeilen, Rest aufklappbar.
+function ImportBriefList(p){
+  var v=p.v;
+  var s_more=useState({});var more=s_more[0],setMore=s_more[1];
+  if(!v)return null;
+  var canWi=p.canWi||function(){return false;};
+  if(v.noMe)return React.createElement("div",{"data-imp-list":"1","data-imp-empty":"name",
+    style:{fontSize:"var(--fs-md)",color:A.textMid,padding:"6px 4px"}},
+    "Dein Name ist keinem Mitarbeiter zugeordnet — deshalb keine Änderungsliste.");
+  if(!v.total)return React.createElement("div",{"data-imp-list":"1","data-imp-empty":"1",
+    style:{fontSize:"var(--fs-md)",color:A.textMid,padding:"6px 4px"}},
+    v.all?"Keine Änderung an Workitems der eingeblendeten Mitarbeiter.":"Keine Änderung an deinen Workitems.");
+  var stats=React.createElement("div",{"data-imp-stats":"1",style:{display:"flex",flexWrap:"wrap",gap:8,marginBottom:10}},
+    v.stats.map(function(s){
+      var red=s.sev==="red",amb=s.sev==="amber",inf=s.sev==="info",ok=s.sev==="ok";
+      return React.createElement("div",{key:s.k,"data-imp-stat":s.k,
+        style:{flex:"1 1 84px",minWidth:0,padding:"8px 10px",borderRadius:"var(--r-lg)",
+          border:"1px solid "+(red?A.coralLine:amb?A.amberLine:A.border),
+          background:red?A.coralLight:amb?A.amberLight:(inf||ok)?A.mintLight:A.bg}},
+        React.createElement("div",{"data-imp-n":"1",style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-2xl)",fontWeight:700,lineHeight:1.05,
+          color:red?A.coralInk:amb?A.amberInk:(inf||ok)?A.mintInk:A.textLight}},String(s.n)),
+        React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textMid,marginTop:3,lineHeight:1.3}},s.label));
+    }));
+  function chip(r){
+    var go=canWi(r.id);
+    var inner=[
+      React.createElement("span",{key:"i",style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-xs)",color:A.textMid,flexShrink:0}},r.id),
+      React.createElement("span",{key:"t",style:{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:240}},r.label)];
+    var st={display:"inline-flex",alignItems:"baseline",gap:6,maxWidth:"100%",margin:"2px 6px 2px 0",padding:"2px 8px",
+      borderRadius:"var(--r-sm)",border:"1px solid "+A.border,background:A.surface,color:A.text,
+      fontFamily:"var(--font-body)",fontSize:"var(--fs-sm)",lineHeight:1.5,verticalAlign:"baseline",textAlign:"left"};
+    if(!go)return React.createElement("span",{"data-imp-wi":r.id,"data-imp-wi-off":"1",title:r.id+(r.title?" · "+r.title:""),
+      style:Object.assign({},st,{opacity:r.kind==="weg"?0.7:1,textDecoration:r.kind==="weg"?"line-through":"none"})},inner);
+    return React.createElement("button",{type:"button","data-imp-wi":r.id,title:r.id+(r.title?" · "+r.title:""),
+      onClick:function(e){e.stopPropagation();if(p.onWi)p.onWi(r.id);},style:Object.assign({},st,{cursor:"pointer"})},inner);
+  }
+  var groups=v.groups.map(function(g){
+    var lim=p.limit||8,open=!!more[g.k],L=open?g.rows:g.rows.slice(0,lim);
+    return React.createElement("div",{key:g.k,"data-imp-group":g.k,style:{marginTop:6}},
+      React.createElement("div",{className:"wb-eyebrow",style:{fontSize:"var(--fs-2xs)",color:A.textLight,textTransform:"uppercase",
+        padding:"6px 4px 2px"}},g.label+" · "+g.rows.length),
+      L.map(function(r,i){
+        return React.createElement("div",{key:g.k+":"+r.id+":"+i,"data-imp-row":r.id,
+          style:{display:"flex",alignItems:"flex-start",gap:10,padding:"7px 4px",borderTop:i===0?"none":"1px solid "+A.border}},
+          React.createElement("span",{"aria-hidden":"true",style:{width:8,height:8,borderRadius:"50%",flexShrink:0,marginTop:8,
+            background:r.sev==="red"?A.coral:r.sev==="amber"?A.amber:r.sev==="ok"?A.green:A.mint}}),
+          React.createElement("div",{style:{flex:1,minWidth:0,fontSize:"var(--fs-md)",color:A.text,lineHeight:1.6}},
+            r.who?React.createElement("span",{"data-imp-who":"1",style:{fontWeight:700,color:A.textMid,marginRight:6}},r.who+":"):null,
+            chip(r),
+            r.text?React.createElement("span",{"data-imp-text":"1"},r.text):null));
+      }),
+      g.rows.length>lim?React.createElement("button",{type:"button","data-imp-more":g.k,
+        onClick:function(){var m=Object.assign({},more);m[g.k]=!open;setMore(m);},
+        style:{margin:"4px 0 0 22px",padding:"3px 10px",borderRadius:"var(--r-pill)",border:"1px solid "+A.border,
+          background:"transparent",color:A.textMid,fontSize:"var(--fs-xs)",fontWeight:700,cursor:"pointer"}},
+        open?"weniger":"+ "+(g.rows.length-lim)+" weitere"):null);
+  });
+  return React.createElement("div",{"data-imp-list":"1"},stats,groups);
+}
+
+// Das Fenster direkt nach dem Import. Escape und ein Tipp daneben schliessen es.
+function ImportBriefOverlay(p){
+  var closeRef=useRef(null);
+  var onCloseRef=useRef(p.onClose);
+  onCloseRef.current=p.onClose;
+  useEffect(function(){
+    function onKey(e){if(e.key==="Escape"){e.preventDefault();onCloseRef.current();}}
+    window.addEventListener("keydown",onKey);
+    try{if(closeRef.current)closeRef.current.focus();}catch(e){}
+    return function(){window.removeEventListener("keydown",onKey);};
+  },[]);
+  var v=p.v;
+  return React.createElement("div",{"data-imp-window":"1",onClick:function(){onCloseRef.current();},
+    style:{position:"fixed",inset:0,background:"rgb(var(--c-ink-rgb) / 0.45)",zIndex:412,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
+    React.createElement("div",{className:"glass-modal",role:"dialog","aria-modal":"true","aria-labelledby":"imp-title",
+      onClick:function(e){e.stopPropagation();},
+      style:{background:A.surface,borderRadius:"var(--r-xl)",width:620,maxWidth:"100%",maxHeight:"88vh",
+        display:"flex",flexDirection:"column",overflow:"hidden",boxShadow:"0 20px 60px rgb(var(--c-ink-rgb) / 0.18)"}},
+      React.createElement("div",{style:{padding:"20px 22px 10px",flexShrink:0}},
+        React.createElement("div",{className:"wb-eyebrow",style:{fontSize:"var(--fs-2xs)",color:A.textLight,textTransform:"uppercase"}},
+          "Import · "+(impWhen(v.at)||"jetzt")),
+        React.createElement("div",{id:"imp-title",style:{fontSize:"var(--fs-2xl)",fontWeight:800,color:A.text,marginTop:6}},
+          "Was sich geändert hat"),
+        React.createElement("div",{"data-imp-scope":v.all?"alle":"meine",style:{fontSize:"var(--fs-md)",color:A.textMid,marginTop:2}},
+          (v.all?"Alle eingeblendeten Mitarbeiter":"Nur deine Workitems")+" — gegenüber dem Stand vor dem Import.")),
+      React.createElement("div",{style:{flex:1,minHeight:0,overflowY:"auto",padding:"4px 22px 6px"}},
+        React.createElement(ImportBriefList,{v:v,onWi:p.onWi,canWi:p.canWi})),
+      React.createElement("div",{style:{flexShrink:0,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",
+        padding:"12px 22px 18px",borderTop:"1px solid "+A.border}},
+        React.createElement("div",{style:{flex:"1 1 160px",minWidth:0,fontSize:"var(--fs-xs)",color:A.textLight}},
+          "Bleibt bis zum nächsten Import in der Kachel „Heute“"),
+        React.createElement("button",{ref:closeRef,type:"button","data-imp-close":"1",
+          onClick:function(){onCloseRef.current();},
+          style:{padding:"9px 18px",borderRadius:"var(--r-md)",border:"none",background:A.mint,color:A.onMint,
+            fontSize:"var(--fs-md)",fontWeight:700,cursor:"pointer"}},"Verstanden"))));
+}
+
 // ══════════════════════════════════════════════════════════
 function Planungstool(){
   var s_sideOpen=useState(function(){try{return window.innerWidth>=768;}catch(_){return true;}}); var sideOpen=s_sideOpen[0],setSideOpen=s_sideOpen[1]; // v2.39.0: mobil default eingeklappt
@@ -6565,6 +6827,11 @@ function Planungstool(){
   // v2.98.0: Briefing-Fenster. Die Import-Erinnerung (importAsk, v2.75.0) ist
   // darin aufgegangen -- als Datenstand-Zeile mit "Jetzt importieren".
   var s_briefOpen=useState(false); var briefOpen=s_briefOpen[0],setBriefOpen=s_briefOpen[1];
+  // v2.99.0: Import-Briefing. Gespeichert werden ALLE Zeilen des letzten
+  // Vergleichs; gefiltert wird bei der Anzeige (impView).
+  var s_impDiff=useState(function(){var v=lsLoad(IMPORT_DIFF_KEY,null);return (v&&typeof v==="object"&&Array.isArray(v.rows))?v:null;});
+  var impDiff=s_impDiff[0],setImpDiff=s_impDiff[1];
+  var s_impOpen=useState(false); var impOpen=s_impOpen[0],setImpOpen=s_impOpen[1];
 
   var s_timeCfg=useState(function(){
     var v=lsLoad(TIME_CFG_KEY,null);
@@ -7254,6 +7521,37 @@ function Planungstool(){
     }
     if(g.t==="view"){if(g.mode)setAuslMode(g.mode);setView(g.v);}
   }
+  // ── v2.99.0: Import-Briefing (Anzeige) ─────────────────────────────
+  // Steht hinter selfEmp/canSeeAll/hiddenEmp. "Alle Daten" zeigt alle
+  // eingeblendeten Mitarbeiter, sonst nur Workitems, die vorher oder jetzt
+  // dem erkannten Mitarbeiter gehoeren.
+  var impView=useMemo(function(){
+    if(!impDiff)return null;
+    return viewImportDiff(impDiff,{meName:selfEmp?selfEmp.name:"",canSeeAll:canSeeAll,hidden:canSeeAll?hiddenEmp:null});
+  },[impDiff,selfEmp,canSeeAll,hiddenEmp]);
+  function impFind(id){
+    var hit=null;
+    (releases||[]).some(function(r){
+      function chk(p,c){if(!hit&&p&&String(p.id)===String(id))hit=Object.assign({},p,{releaseId:r.id,componentId:c?c.id:null,
+        rc:getBcColor(r),rn:r.name,cn:c?(c.name||""):"",fcDueDate:c?(c.dueDate||""):"",bcDueDate:r.dueDate||""});}
+      (r.directPackages||[]).forEach(function(p){chk(p,null);});
+      (r.components||[]).forEach(function(c){(c.packages||[]).forEach(function(p){chk(p,c);});});
+      return !!hit;
+    });
+    return hit;
+  }
+  // Sichtschutz: gesperrt nur eigene WIs oeffnen -- ein abgegebenes WI gehoert
+  // jetzt dem Kollegen, sein Bearbeiten-Fenster nennt dessen Namen.
+  function impCanWi(id){
+    var pk=impFind(id);
+    if(!pk)return false;
+    return canSeeAll||(!!selfEmp&&pk.employee===selfEmp.id);
+  }
+  function impGo(id){
+    if(!impCanWi(id))return;
+    setImpOpen(false);setBriefOpen(false);
+    setEditPkg(impFind(id));setModal("editPkg");
+  }
   var replanCount=analysis.filter(function(r){return r.status==="replan";}).length;
   var pufferCount=analysis.filter(function(r){return r.status==="puffer";}).length;
   var gainCount=analysis.filter(function(r){return r.endShifted;}).length;
@@ -7379,7 +7677,7 @@ function Planungstool(){
     reader.onload=function(ev){
       try{
         var wb=file.name.endsWith(".csv")?XLSX.read(ev.target.result,{type:"string"}):XLSX.read(ev.target.result,{type:"array"});
-        setImportWarning("");var parsed=parseImportData(wb);
+        setImportWarning("");var parsed=parseImportData(wb);var impPend=false;
         var emps=parsed.employees,rels=parsed.releases;
         if(!emps.length&&!rels.length){setImportState("error");setImportMsg("Keine Daten erkannt.");return;}
         if(emps.length){
@@ -7411,6 +7709,17 @@ function Planungstool(){
             return nx;
           });
         }
+        // v2.99.0: Import-Briefing -- alter Plan gegen neuen Stand, VOR dem
+        // Ueberschreiben. stateRef, weil handleFile ohne Abhaengigkeiten lebt.
+        if(rels.length){
+          try{
+            var cur0=stateRef.current||{};
+            var dImp=buildImportDiff(cur0.releases,cur0.employees,rels,emps.length?emps:cur0.employees,new Date().toISOString());
+            setImpDiff(dImp);
+            try{if(dImp)localStorage.setItem(IMPORT_DIFF_KEY,JSON.stringify(dImp));else localStorage.removeItem(IMPORT_DIFF_KEY);}catch(e2){}
+            impPend=!!dImp;
+          }catch(eD){}
+        }
         if(rels.length){var nR={},nC={};rels.forEach(function(r){nR[r.id]=true;r.components.forEach(function(c){nC[c.id]=true;});});setExR(nR);setExC(nC);setReleases(rels);}
         var st=parsed.stats||null;
         if(parsed._issueOnlyImport&&window._setImportWarning){window._setImportWarning("Issue-only Export erkannt: keine Workitems/Termine enthalten.\nGantt, Auslastung und Team-Ansicht bleiben leer.\nFür vollständige Planung: CQ-Query mit Workitem-Spalten exportieren.");}
@@ -7421,6 +7730,7 @@ function Planungstool(){
         rawSheet=remapClearQuestColumns(rawSheet);
         if(rawSheet.length)setRawData(normalizeToClearQuestTable(rawSheet));
         lsSave("ptool_saved_at",new Date().toISOString());setImportState("success");setImportMsg(emps.length+" Mitarbeiter, "+rels.length+" Releases importiert");setModal(null);
+        if(impPend){setBriefOpen(false);setImpOpen(true);}
       }catch(err){setImportState("error");setImportMsg("Fehler: "+err.message);}
     };
     file.name.endsWith(".csv")?reader.readAsText(file):reader.readAsArrayBuffer(file);
@@ -7484,6 +7794,8 @@ function Planungstool(){
         {id:"V-14",p:"M",t:"Funk",r:"Das Briefing rechnet offline aus vorhandenen Daten: Analyse (Prognose), Lastkarte, Abwesenheitskarte mit Feiertagen. Horizonte tragen ihr Datum: 5 AT fuer Start und Faelligkeit, 10 AT fuer Ueberlast, wartende Vorgaenger und Abwesenheiten. Workitems unter nicht freigegebenen Issues zaehlen nicht.",v:"brWorkdayEnd, countsForEffort",tc:"BR-B-1..7 [Auto]"},
         {id:"V-15",p:"S",t:"Funk",r:"Jede Zeile des Briefings fuehrt in die passende Ansicht (Umplanung, Termin-Radar, Zeitstrahl, Mitarbeiter, Import); eine Workitem-Kennung oeffnet das Workitem.",v:"briefGo",tc:"BR-C-1..5 [Auto]"},
         {id:"V-16",p:"M",t:"Funk",r:"Sichtschutz im Briefing: nur eigene Workitems. Ein fremder Vorgaenger erscheint mit Kennung und Titel; der Name nur in der erweiterten Ansicht, sonst „Kollege“.",v:"buildBriefing (canSeeAll)",tc:"BR-D-1..3 [Auto]"},
+        {id:"V-17",p:"M",t:"Funk",r:"Import-Briefing: Nach dem Laden neuer Daten ein Fenster, welche Workitems sich gegenueber dem bisherigen Plan geaendert haben -- je Workitem eine Zeile in den Gruppen Geaendert (Start/Ende mit AT, Restaufwand, Bearbeiter, Status, Issue-Freigabe), Neu, Abgeschlossen, Entfallen; oben Kennzahlen. Dieselbe Liste bleibt bis zum naechsten Import in der Kachel M0.",v:"buildImportDiff, viewImportDiff, ImportBriefOverlay, ptool_import_diff",tc:"IB-A..C [Auto]"},
+        {id:"V-18",p:"M",t:"Funk",r:"Sichtschutz im Import-Briefing: in der eigenen Sicht nur Workitems, die vorher oder jetzt dem Nutzer gehoeren; der andere Bearbeiter heisst Kollege, ein abgegebenes WI oeffnet sich nicht. In der erweiterten Ansicht alle eingeblendeten Mitarbeiter mit Namen.",v:"viewImportDiff (canSeeAll, hidden), impCanWi",tc:"IB-D-1..4 [Auto]"},
       ]},
       {id:"G",title:"5. Gantt-Darstellung",col:A.coral,items:[
         {id:"G-10",p:"M",t:"Funk",r:"Workitems lassen sich im Gantt waagerecht per Drag and Drop verschieben. Losgelassen wird nur der Start gesetzt; Ende, Abwesenheiten und Abhaengigkeiten rechnet updatePkgDates neu.",v:"movePkgTo -> updatePkgDates",tc:"D-A-* [Auto]"},
@@ -7752,6 +8064,12 @@ function Planungstool(){
       {id:"BR-C-2",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Zeile springt in ihre Ansicht",c:"BC-Zeile, Ueberlast-Zeile, Vorgaenger-Zeile antippen",e:"Termin-Radar, Zeitstrahl, Umplanung"},
       {id:"BR-D-1",g:"S – Sichtschutz",ty:"Auto",s:"Bestanden",r:"Kein fremder Name im Briefing",c:"gesperrt, Vorgaenger gehoert Zwiebelfisch",e:"Kennung und Titel, Name als Kollege"},
       {id:"BR-E-1",g:"T – Technisch",ty:"Auto",s:"Bestanden",r:"Briefing ohne Netz",c:"Start im Browser mit gesperrtem Netz",e:"keine Anfrage nach aussen, Fenster erscheint"},
+      // v2.99.0 – Import-Briefing
+      {id:"IB-A-1",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Fenster nach dem Import",c:"Anna laedt eine geaenderte Excel-Datei",e:"Fenster Was sich geaendert hat, Kennzahlen, Gruppen"},
+      {id:"IB-B-1",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Aenderung je Workitem in einer Zeile",c:"Ende von WI-A2 um 3 AT spaeter, Rest 40 -> 48 h",e:"Ende 16.10.→21.10. (+3 AT) · Rest 40→48 h"},
+      {id:"IB-C-1",g:"Dashboard",ty:"Auto",s:"Bestanden",r:"Liste bleibt in der Kachel Heute",c:"Neustart nach dem Import",e:"Abschnitt Seit dem Import in M0"},
+      {id:"IB-D-1",g:"S – Sichtschutz",ty:"Auto",s:"Bestanden",r:"Nur meine: keine fremden Workitems und Namen",c:"Import aendert auch WIs eines Kollegen",e:"nur eigene Zeilen, Kollege statt Name"},
+      {id:"IB-D-2",g:"S – Sichtschutz",ty:"Auto",s:"Bestanden",r:"Alle Daten: eingeblendete Mitarbeiter mit Namen",c:"1404, ein Kollege ausgeblendet",e:"eingeblendete mit Namen, ausgeblendeter nicht"},
       {id:"DS-01",g:"Darstellung",ty:"Auto",s:"Bestanden",r:"WI ohne Datum erzeugt kein NaN",c:"toX('',units,cw)",e:"0 statt NaN"},
       {id:"DS-02",g:"Darstellung",ty:"Auto",s:"Bestanden",r:"Unlesbares Datum abgefangen",c:"toX('kaputt',...)",e:"0 statt NaN"},
       {id:"DS-03",g:"Darstellung",ty:"Auto",s:"Bestanden",r:"barW ohne Datum liefert Mindestbreite",c:"barW('','',30)",e:">=4"},
@@ -12113,7 +12431,13 @@ function Planungstool(){
 
         // v2.98.0: Briefing -- dieselbe Liste wie das Fenster nach der Anmeldung.
         Card({tag:"M0",title:"Heute · "+brWdDay(todayStr),wide:true},
-          React.createElement(BriefingList,{b:briefing,onGo:briefGo,canGo:briefCanGo})),
+          React.createElement(BriefingList,{b:briefing,onGo:briefGo,canGo:briefCanGo}),
+          // v2.99.0: Aenderungen des letzten Imports, bis zum naechsten Import
+          impView&&React.createElement("div",{"data-imp-tile":"1",style:{marginTop:12,paddingTop:10,borderTop:"1px solid "+A.border}},
+            React.createElement("div",{style:{fontSize:"var(--fs-sm)",fontWeight:800,color:A.text,marginBottom:6}},
+              "Seit dem Import"+(impWhen(impView.at)?" vom "+impWhen(impView.at):"")+
+              (impView.all?" · alle eingeblendeten Mitarbeiter":" · deine Workitems")),
+            React.createElement(ImportBriefList,{v:impView,onWi:impGo,canWi:impCanWi,limit:5}))),
 
         Card({tag:"M1",title:"Woran ich gerade arbeite"},
           laufend.length?laufend.slice(0,5).map(function(p,i){
@@ -16164,6 +16488,9 @@ function Planungstool(){
     briefOpen&&briefing&&React.createElement(BriefingOverlay,{b:briefing,
       greet:"Moin, "+String(selfEmp?selfEmp.name:(dashUser||"")).split(" ")[0],
       onGo:briefGo,canGo:briefCanGo,onClose:function(){setBriefOpen(false);}}),
+    // v2.99.0: Import-Briefing direkt nach dem Laden neuer Daten.
+    impOpen&&impView&&React.createElement(ImportBriefOverlay,{v:impView,onWi:impGo,canWi:impCanWi,
+      onClose:function(){setImpOpen(false);}}),
     scenEdit&&React.createElement(ScenarioOverlay,{
       initial:scenEdit,employees:visibleEmployees(),releases:releases, // v2.75.2
       onSave:function(sc){
