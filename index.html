@@ -7497,6 +7497,40 @@ function Planungstool(){
     });
     return buildLoadMap(all,employees,dateStr(new Date()),{chargePast:true});
   },[activeReleases,employees]);
+  // v2.99 (12.11.2026): Lesekopie fuer die Live-Kachel im Werkzeugkasten des
+  // Kontors. Gerechnet wie die Heatmap P1: Last gegen verfuegbare Stunden,
+  // Wochenende und Abwesenheiten zaehlen nicht. Im Beispielbetrieb (ohne
+  // Lizenz und ohne eigenen Bestand) wird nichts geschrieben.
+  useEffect(function(){
+    try{
+      if(window.WBTor&&WBTor.beispiel&&WBTor.beispiel())return;
+      var emps=visibleEmployees().filter(function(e){return !hiddenEmp[e.name];});
+      // Noch niemand erkannt (der Startbildschirm fragt je Sitzung): den
+      // letzten Stand stehen lassen statt ihn zu loeschen.
+      if(!emps.length)return;
+      var mo=new Date();mo.setHours(0,0,0,0);mo.setDate(mo.getDate()-((mo.getDay()+6)%7));
+      var wochen=[],jetzt=[];
+      for(var w=0;w<6;w++){
+        var cap=0,load=0;
+        emps.forEach(function(e){
+          var c=(e.weeklyHours||35)/5,am=absenceMap[e.id]||{},lm=loadMap[e.id]||{},ec=0,el=0;
+          for(var i=0;i<5;i++){
+            var d=new Date(mo);d.setDate(mo.getDate()+w*7+i);
+            var k=dateStr(d);if(am[k])continue;
+            ec+=c;el+=lm[k]||0;
+          }
+          cap+=ec;load+=el;
+          if(w===0&&ec>0)jetzt.push({n:e.name,p:Math.round(el/ec*100)});
+        });
+        var st=new Date(mo);st.setDate(mo.getDate()+w*7);
+        wochen.push({kw:isoWeek(st),von:dateStr(st),pct:cap>0?Math.round(load/cap*100):0});
+      }
+      jetzt.sort(function(a,b){return b.p-a.p;});
+      localStorage.setItem("wb-kapa-stand",JSON.stringify({app:"werkbank-kapazitaetenplaner",version:1,
+        stand:new Date().toISOString(),mitarbeiter:emps.length,nur:canSeeAll?null:(selfEmp?selfEmp.name:null),wochen:wochen,
+        ueberlastet:jetzt.filter(function(x){return x.p>100;}).length,spitze:jetzt.slice(0,3)}));
+    }catch(e){}
+  },[loadMap,absenceMap,employees,hiddenEmp,canSeeAll,selfEmp]);
   // ── v2.98.0: Briefing ──────────────────────────────────────────────
   // Steht HINTER analysis, loadMap und absenceMap -- weiter oben waeren sie
   // per Hoisting undefined (v2.20.11). Das Datum kommt je Render herein,
