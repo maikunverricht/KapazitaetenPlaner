@@ -2551,7 +2551,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.5.0";
+var APP_VERSION="3.5.1";
+// v3.5.1: Review-Anteil im Schritt einstellbar (vlauf.review, Standard 20 %).
 // v3.5.0: Rolle Review je Prozessschritt (zweite Ablage im kleinen V, Review-Workitems aus ClearQuest am Titel erkannt); Lesekopie mit entwickler/reviewer je Schritt.
 // v3.4.3: Auftragsordner – vorhandenen Ordner zur Issue-ID weiterverwenden; beim Oeffnen/Fokus pruefen, ob die Ordner noch da sind (fehlt/umbenannt).
 // v3.4.2: Flow aufgeklappt -- vollstaendige Workitem-Liste (auch closed, Ausgeblendete, ohne Release), keine doppelten Zeilen mehr.
@@ -4698,7 +4699,9 @@ function vlLaden(){
     var wis={};Object.keys(a.wis||{}).forEach(function(id){var w=a.wis[id];if(w&&typeof w==="object"&&w.k&&w.ma)wis[id]=Object.assign({},w,{id:id,iid:iid});});
     au[iid]=Object.assign({},a,{iid:iid,wis:wis,ordner:a.ordner&&typeof a.ordner==="object"?a.ordner:{link:""}});
   });
-  return {v:1,anteile:an,auftraege:au};
+  var o={v:1,anteile:an,auftraege:au};
+  var rv=Number(v.review);if(v.review!=null&&isFinite(rv)&&rv>=0&&rv<=100)o.review=rv; // v3.5.1
+  return o;
 }
 function vlAuftrag(vl,iid){return (vl&&vl.auftraege&&vl.auftraege[iid])||null;}
 function vlWiListe(vl){
@@ -14425,7 +14428,8 @@ function Planungstool(){
     // v3.5.0: Review bekommt VL_REVIEW_ANTEIL % des Schritts, Entwicklung den Rest -- sofern beide Rollen besetzt sind
     var mitRev=alle.some(vlIstReview)||cqs.some(vlIstReview),mitEnt=alle.some(function(w){return !vlIstReview(w);})||cqs.some(function(w){return !vlIstReview(w);});
     [false,true].forEach(function(rev){
-      var teil=mitRev&&mitEnt?soll*(rev?VL_REVIEW_ANTEIL:100-VL_REVIEW_ANTEIL)/100:soll;
+      var ra=n.review!=null?Math.min(100,Math.max(0,Number(n.review)||0)):VL_REVIEW_ANTEIL;
+      var teil=mitRev&&mitEnt?soll*(rev?ra:100-ra)/100:soll;
       var gl=function(w){return vlIstReview(w)===rev;};
       var ws=alle.filter(function(w){return gl(w)&&w.lcs!=="closed"&&!w.hFix;});
       if(!ws.length)return;
@@ -14733,7 +14737,12 @@ function Planungstool(){
         return React.createElement("label",{key:s.k,style:Object.assign({},klein,{display:"inline-flex",gap:4,alignItems:"center"})},s.k==="EIN"||s.k==="ABS"?s.n:s.k,
           React.createElement("input",{type:"number",min:0,max:100,step:1,value:vlauf.anteile[s.k],"data-vl-anteil":s.k,
             onChange:function(e){var v=Math.max(0,Number(e.target.value)||0);vlAendern(function(n){n.anteile[s.k]=v;});},style:Object.assign({},eingabe,{width:48})}),"%");
-      })));
+      }).concat([React.createElement("label",{key:"rev",title:"Anteil der Review-Workitems am Aufwand eines Schritts; der Rest geht an die Entwicklung",
+          style:Object.assign({},klein,{display:"inline-flex",gap:4,alignItems:"center",marginLeft:8,paddingLeft:10,borderLeft:"1px solid "+A.border})},"davon Review",
+        React.createElement("input",{type:"number",min:0,max:100,step:1,value:vlauf.review!=null?vlauf.review:VL_REVIEW_ANTEIL,"data-vl-review-anteil":"1",
+          onChange:function(e){var v=Math.min(100,Math.max(0,Number(e.target.value)||0));
+            vlAendern(function(n){n.review=v;Object.keys(n.auftraege||{}).forEach(function(iid){var a=n.auftraege[iid];VL_SCHRITTE.forEach(function(x){vlVerteilen(n,a,x.k);});});});},
+          style:Object.assign({},eingabe,{width:48})}),"% je Schritt")])));
     var ac=WBAblage.cfg();
     var ablage=React.createElement("details",{style:{marginTop:6}},
       React.createElement("summary",{style:Object.assign({},klein,{cursor:"pointer",fontWeight:700})},"Ablage der Auftragsordner (f\u00fcr alle Auftr\u00e4ge) \u00b7 "+(ac.name?"Wurzel \u201e"+ac.name+"\u201c":"noch keine Wurzel")),
