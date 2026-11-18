@@ -2551,7 +2551,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.0.0";
+var APP_VERSION="3.1.0";
+// v3.1.0: Lesekopie mit allen Issues, Beteiligten und angemeldetem Mitarbeiter (Kontor: meine Auftraege, V-Ampel).
 // v3.0.0: V-Durchlauf je Auftrag -- Mitarbeiter je Prozessschritt (Flow, Drag & Drop),
 //   Workitems im Werkzeug, Grobplanung nach V und Kapazitaet, L1 aus der Issue-Beschreibung,
 //   Lesekopie wb-kapazitaetenplaner-auftraege fuer die V-Werkzeuge.
@@ -4608,23 +4609,47 @@ function vlIndex(idx,vl){
   });
   return out||idx;
 }
-// Lesekopie fuer Anforderungsbuch & Co. (Hoheit bleibt hier).
-function vlLesekopie(vl,idx){
-  var au=(vl&&vl.auftraege)||{};
+// Lesekopie fuer Kontor, Anforderungsbuch & Co. (Hoheit bleibt hier).
+// v3.1.0: alle Issues (Import filtert canceled/closed), je Issue die
+// Beteiligten (V-Workitems + ClearQuest-Workitems) und wer angemeldet ist --
+// der Kontor zeigt damit "meine Auftraege" mit dem V als Ampel.
+function vlLesekopie(vl,idx,rels,emps,angemeldet){
+  var au=(vl&&vl.auftraege)||{},ix=idx||{};
+  var nameById={};(emps||[]).forEach(function(e){if(e)nameById[e.id]=e.name;});
+  var pk={};
+  (rels||[]).forEach(function(r){if(!r)return;
+    (r.directPackages||[]).forEach(function(p){if(p)pk[p.id]=p;});
+    (r.components||[]).forEach(function(c){(c.packages||[]).forEach(function(p){if(p)pk[p.id]=p;});});});
+  var ids=Object.keys(ix);Object.keys(au).forEach(function(iid){if(ids.indexOf(iid)<0)ids.push(iid);});
   return {quelle:"kapazitaetenplaner",version:APP_VERSION,updated:new Date().toISOString(),
+    angemeldet:angemeldet||"",heute:dateStr(new Date()),
     schritte:VL_SCHRITTE.map(function(s){return {k:s.k,name:s.n,werkzeug:s.w};}),
-    auftraege:Object.keys(au).map(function(iid){
-      var a=au[iid],x=(idx&&idx[iid])||{},wis=Object.keys(a.wis||{}).map(function(k){return a.wis[k];});
-      var sch={};
+    auftraege:ids.map(function(iid){
+      var a=au[iid]||{wis:{}},x=ix[iid]||{},wis=Object.keys(a.wis||{}).map(function(k){return a.wis[k];});
+      var sch={},bet=[];
+      function dabei(n){if(n&&bet.indexOf(n)<0)bet.push(n);}
       VL_SCHRITTE.forEach(function(s){
         var ws=wis.filter(function(w){return w.k===s.k;});if(!ws.length)return;
+        ws.forEach(function(w){dabei(w.ma);});
         sch[s.k]={mitarbeiter:ws.map(function(w){return w.ma;}),status:vlSchrittStatus(ws),
           start:ws.reduce(function(m,w){return w.start&&(!m||w.start<m)?w.start:m;},""),
           ende:ws.reduce(function(m,w){return w.end&&w.end>m?w.end:m;},""),
+          rest:ws.reduce(function(m,w){return m+(w.lcs==="closed"?0:(Number(w.rest)||0));},0),
           workitems:ws.map(function(w){return w.id;})};
       });
-      return {id:iid,titel:x.t||iid,lcs:x.l||"",bc:x.bc||"",aufwand:Number(a.aufwand)||0,
-        l1:x.d?[{id:iid+"-L1",t:x.d}]:[],ordner:a.ordner||{link:""},schritte:sch};
+      // ClearQuest-Workitems des Issues (ohne die eigenen V-Workitems)
+      var cq=(x.wis||[]).filter(function(id){return !(a.wis&&a.wis[id]);}).map(function(id){return pk[id];}).filter(Boolean);
+      cq.forEach(function(p){dabei(nameById[p.employee]);});
+      var cqSt=cq.length?vlSchrittStatus(cq.map(function(p){return {lcs:p.lcs==="closed"?"closed":(p.lcs==="started"?"started":"new")};})):"";
+      var l1=x.d?String(x.d):"";
+      return {id:iid,titel:x.t||iid,lcs:x.l||"",bc:x.bc||"",bcPlan:x.bcPlan||"",
+        fcs:(x.fcs||[]).map(function(f){return f.name;}).filter(Boolean),
+        aufwand:Number(a.aufwand)||x.e||0,imV:wis.length>0,beteiligt:bet,
+        l1:l1?[{id:iid+"-L1",t:l1.length>4000?l1.slice(0,4000)+"…":l1}]:[],
+        ordner:a.ordner||{link:""},schritte:sch,
+        cq:cq.length?{workitems:cq.length,status:cqSt,
+          start:cq.reduce(function(m,p){return p.start&&(!m||p.start<m)?p.start:m;},""),
+          ende:cq.reduce(function(m,p){return p.end&&p.end>m?p.end:m;},"")}:null};
     })};
 }
 
@@ -6538,9 +6563,7 @@ function Planungstool(){
   }
   useEffect(function(){
     try{localStorage.setItem(VL_KEY,JSON.stringify(vlauf));}catch(e){}
-    if(window.WBTor&&WBTor.beispiel&&WBTor.beispiel())return;
-    try{localStorage.setItem(VL_LESEKOPIE,JSON.stringify(vlLesekopie(vlauf,issueIdxRaw)));}catch(e){}
-  },[vlauf,issueIdxRaw]);
+  },[vlauf]);
   var s_absences=useState(function(){
     var v=safeList("ptool_absences","Abwesenheiten",lsLoad("ptool_absences",null),
       function(x){return isPlainObj(x)&&(x.employee!=null||x.employeeName!=null);});
@@ -7314,6 +7337,20 @@ function Planungstool(){
   var selfEmp=useMemo(function(){
     return matchEmployeeByName(dashUser,employees)||null;
   },[dashUser,employees]);
+  // v3.1.0: Lesekopie der Auftraege (Kontor: "meine Auftraege" mit V-Ampel).
+  // Angemeldet = erkannter Mitarbeiter aus der Startabfrage; der letzte bleibt
+  // stehen, damit der Kontor ihn auch bei geschlossenem Planer kennt.
+  var vlAngemeldet=useRef("");
+  if(selfEmp&&selfEmp.name)vlAngemeldet.current=selfEmp.name;
+  useEffect(function(){
+    if(window.WBTor&&WBTor.beispiel&&WBTor.beispiel())return;
+    var t=setTimeout(function(){
+      var an=vlAngemeldet.current;
+      if(!an){try{var alt=JSON.parse(localStorage.getItem(VL_LESEKOPIE)||"null");an=(alt&&alt.angemeldet)||"";}catch(e){}}
+      try{localStorage.setItem(VL_LESEKOPIE,JSON.stringify(vlLesekopie(vlauf,issueIdxRaw,releases,employees,an)));}catch(e){}
+    },400);
+    return function(){clearTimeout(t);};
+  },[vlauf,issueIdxRaw,releases,employees,selfEmp]);
   // v2.75.1: NUR die erweiterte Ansicht oeffnet fremde Daten. Ohne erkannten
   // Mitarbeiter bleibt die personenbezogene Sicht leer -- vorher war sie
   // vollstaendig, was den Schutz mit einem Klick aushebelte.
