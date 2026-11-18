@@ -2551,7 +2551,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.1.0";
+var APP_VERSION="3.2.0";
+// v3.2.0: Auftragsordner anlegen (Ablage-Wurzel, Unterordner, auftrag.json; ZIP-Fallback), aktiver Auftrag fuer alle Werkzeuge, Rueckmeldung der Werkzeuge je Schritt im V.
 // v3.1.0: Lesekopie mit allen Issues, Beteiligten und angemeldetem Mitarbeiter (Kontor: meine Auftraege, V-Ampel).
 // v3.0.0: V-Durchlauf je Auftrag -- Mitarbeiter je Prozessschritt (Flow, Drag & Drop),
 //   Workitems im Werkzeug, Grobplanung nach V und Kapazitaet, L1 aus der Issue-Beschreibung,
@@ -4480,6 +4481,127 @@ if(typeof window!=="undefined"){window.buildIssueIndex=buildIssueIndex;window.is
 // ein neuer ClearQuest-Import ersetzt releases und darf sie nicht verwerfen.
 // Lesekopie fuer die V-Werkzeuge: wb-kapazitaetenplaner-auftraege.
 // ════════════════════════════════════════════════════════════════════
+/* ═══ WBAblage · Auftragsordner (gemeinsam für alle Werkzeuge, seit 18.11.2026) ═══
+   Alle Werkzeuge liegen unter maikunverricht.github.io und teilen damit IndexedDB
+   und localStorage. Die Wurzel (Netzlaufwerk oder per OneDrive synchronisierter
+   SharePoint-Ordner) wird einmal gewählt; der Ordner-Zugriff liegt in der
+   IndexedDB „wb-ablage“. Je Auftrag: <IssueID>_<Kurztitel>/ mit festen
+   Unterordnern. Ohne File System Access (Firefox, Safari): ZIP mit dem Gerüst.
+   Aktiver Auftrag (für alle Werkzeuge): localStorage „wb-aktiver-auftrag“. */
+(function(){
+  if (window.WBAblage) return;
+  const UNTER = ['00_Auftrag','01_Anforderungen','02_Architektur','03_Funktionen','04_Review','05_Tests','06_Kommunikation','07_Protokolle'];
+  const CFG = 'wb-ablage-cfg', AKTIV = 'wb-aktiver-auftrag';
+  const kann = typeof window.showDirectoryPicker === 'function';
+  let merk = null; // Wurzel dieser Sitzung (spart den Weg über die IndexedDB)
+  function db(){ return new Promise((ok, nein) => { const r = indexedDB.open('wb-ablage', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => ok(r.result); r.onerror = () => nein(r.error); }); }
+  async function get(k){ const d = await db(); return new Promise((ok, nein) => { const q = d.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => ok(q.result); q.onerror = () => nein(q.error); }); }
+  async function put(k, v){ const d = await db(); return new Promise((ok, nein) => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = ok; t.onerror = () => nein(t.error); }); }
+  function cfg(){ try { return JSON.parse(localStorage.getItem(CFG) || 'null') || {}; } catch (e) { return {}; } }
+  function cfgSetzen(o){ const c = Object.assign(cfg(), o); try { localStorage.setItem(CFG, JSON.stringify(c)); } catch (e) {} return c; }
+  function ordnerName(iid, titel){
+    const kurz = String(titel || '').replace(/[\\/:*?"<>|#%&{}~]+/g, ' ').replace(/\s+/g, '_').replace(/^[._]+|[._]+$/g, '').slice(0, 40).replace(/[._]+$/, '');
+    return String(iid).replace(/[\\/:*?"<>|]+/g, '') + (kurz ? '_' + kurz : '');
+  }
+  function linkFuer(name){
+    const w = (cfg().link || '').trim(); if (!w) return '';
+    if (/^https?:\/\//i.test(w)) return w.replace(/\/+$/, '') + '/' + encodeURIComponent(name);
+    return w.replace(/[\\/]+$/, '') + (w.includes('/') && !w.includes('\\') ? '/' : '\\') + name;
+  }
+  async function wurzelWaehlen(){
+    if (!kann) throw new Error('Dieser Browser kann keine Ordner anlegen (Chrome oder Edge nehmen).');
+    const h = await window.showDirectoryPicker({ id:'wb-ablage', mode:'readwrite' });
+    merk = h; await put('wurzel', h); cfgSetzen({ name:h.name, gewaehlt:new Date().toISOString() });
+    return h;
+  }
+  /* fragen = true nur aus einem Klick heraus (Browser verlangt eine Geste) */
+  async function wurzel(fragen){
+    if (!kann) return null;
+    let h = merk; if (!h) { try { h = await get('wurzel'); } catch (e) {} merk = h || null; }
+    if (!h) return null;
+    const o = { mode:'readwrite' };
+    let p = await h.queryPermission(o);
+    if (p !== 'granted' && fragen) p = await h.requestPermission(o);
+    return p === 'granted' ? h : null;
+  }
+  async function auftragsordner(name, fragen, anlegen){
+    const w = await wurzel(fragen); if (!w) return null;
+    return w.getDirectoryHandle(name, { create:!!anlegen });
+  }
+  async function schreibenIn(dir, pfad, inhalt){
+    const teile = pfad.split('/'); let d = dir;
+    for (let i = 0; i < teile.length - 1; i++) d = await d.getDirectoryHandle(teile[i], { create:true });
+    const f = await d.getFileHandle(teile[teile.length - 1], { create:true });
+    const w = await f.createWritable(); await w.write(inhalt); await w.close();
+  }
+  /* Ordner samt Gerüst anlegen; vorhandene Dateien bleiben unberührt (außer auftrag.json). */
+  async function anlegen(iid, titel, steckbrief){
+    const name = ordnerName(iid, titel);
+    const dir = await auftragsordner(name, true, true);
+    if (!dir) throw new Error(kann ? 'Kein Zugriff auf die Ablage – erst die Wurzel wählen.' : 'Dieser Browser kann keine Ordner anlegen.');
+    for (const u of UNTER) await dir.getDirectoryHandle(u, { create:true });
+    await schreibenIn(dir, '00_Auftrag/auftrag.json', JSON.stringify(steckbrief || { id:iid, titel }, null, 2));
+    return { name, link:linkFuer(name), angelegt:new Date().toISOString().slice(0, 10) };
+  }
+  /* Datei in den Unterordner des Auftrags legen. true = abgelegt, false = nicht möglich. */
+  async function ablegen(ordner, unter, dateiname, inhalt){
+    if (!ordner || !ordner.name) return false;
+    try { const dir = await auftragsordner(ordner.name, true, false); if (!dir) return false;
+      await schreibenIn(dir, (unter ? unter + '/' : '') + dateiname, inhalt); return true; }
+    catch (e) { console.warn('WBAblage', e); return false; }
+  }
+  /* ZIP (ungepackt) mit Gerüst und auftrag.json – für Browser ohne Ordnerzugriff */
+  const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++){ let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  const crc32 = u => { let c = 0xFFFFFFFF; for (let i = 0; i < u.length; i++) c = CRC[(c ^ u[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  function zip(eintraege){
+    const enc = new TextEncoder(), teile = [], zentral = []; let off = 0;
+    eintraege.forEach(d => {
+      const name = enc.encode(d.name), daten = enc.encode(d.text || ''), c = crc32(daten), ordner = d.name.endsWith('/');
+      const lh = new DataView(new ArrayBuffer(30)); lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true);
+      lh.setUint32(14, c, true); lh.setUint32(18, daten.length, true); lh.setUint32(22, daten.length, true); lh.setUint16(26, name.length, true);
+      teile.push(new Uint8Array(lh.buffer), name, daten);
+      const ch = new DataView(new ArrayBuffer(46)); ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+      ch.setUint32(16, c, true); ch.setUint32(20, daten.length, true); ch.setUint32(24, daten.length, true); ch.setUint16(28, name.length, true);
+      ch.setUint32(38, ordner ? 0x10 : 0, true); ch.setUint32(42, off, true);
+      zentral.push(new Uint8Array(ch.buffer), name); off += 30 + name.length + daten.length;
+    });
+    const gz = zentral.reduce((s, u) => s + u.length, 0);
+    const ende = new DataView(new ArrayBuffer(22)); ende.setUint32(0, 0x06054b50, true); ende.setUint16(8, eintraege.length, true); ende.setUint16(10, eintraege.length, true);
+    ende.setUint32(12, gz, true); ende.setUint32(16, off, true);
+    return new Blob([...teile, ...zentral, new Uint8Array(ende.buffer)], { type:'application/zip' });
+  }
+  function geruestZip(iid, titel, steckbrief){
+    const name = ordnerName(iid, titel);
+    const e = UNTER.map(u => ({ name:name + '/' + u + '/' }));
+    e.push({ name:name + '/00_Auftrag/auftrag.json', text:JSON.stringify(steckbrief || { id:iid, titel }, null, 2) });
+    return { name, blob:zip(e) };
+  }
+  function aktiv(){ try { return JSON.parse(localStorage.getItem(AKTIV) || 'null'); } catch (e) { return null; } }
+  function aktivSetzen(a, von){
+    try { if (!a) localStorage.removeItem(AKTIV);
+      else localStorage.setItem(AKTIV, JSON.stringify({ id:a.id, titel:a.titel || '', bc:a.bc || '', ordner:a.ordner || null, von:von || '', gesetzt:new Date().toISOString() })); } catch (e) {}
+  }
+  /* Ordner eines Auftrags: aus der Planer-Lesekopie (führend), sonst vom aktiven Auftrag */
+  function ordnerVon(id){
+    if (!id) return null;
+    let o = null; const a = aktiv(); if (a && a.id === id && a.ordner && a.ordner.name) o = a.ordner;
+    try { const kp = JSON.parse(localStorage.getItem('wb-kapazitaetenplaner-auftraege') || 'null');
+      const e = kp && Array.isArray(kp.auftraege) && kp.auftraege.find(x => x.id === id);
+      if (e && e.ordner && e.ordner.name) o = e.ordner; } catch (e) {}
+    return o;
+  }
+  /* Ablegen, sonst herunterladen. Gibt 'ablage' oder 'download' zurück. */
+  async function sichern(id, unter, dateiname, blob){
+    const o = ordnerVon(id);
+    if (o && await ablegen(o, unter, dateiname, blob)) return 'ablage';
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = dateiname; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+    return 'download';
+  }
+  window.WBAblage = { UNTER, kann, cfg, cfgSetzen, ordnerName, linkFuer, wurzelWaehlen, wurzel, anlegen, ablegen, geruestZip, aktiv, aktivSetzen, ordnerVon, sichern };
+})();
+
 var VL_KEY="ptool_vlauf";
 var VL_LESEKOPIE="wb-kapazitaetenplaner-auftraege";
 var VL_SCHRITTE=[
@@ -4613,6 +4735,31 @@ function vlIndex(idx,vl){
 // v3.1.0: alle Issues (Import filtert canceled/closed), je Issue die
 // Beteiligten (V-Workitems + ClearQuest-Workitems) und wer angemeldet ist --
 // der Kontor zeigt damit "meine Auftraege" mit dem V als Ampel.
+// v3.2.0: Rueckmeldung der Werkzeuge je Schritt -- aus deren Lesekopien.
+// SWE.1 Anforderungsbuch (L1-L4 des Auftrags), SWE.3 Funktionsentwurf (geaenderte
+// Funktionen, wenn dort dieser Auftrag aktiv war), SWE.4/5/6 TestcaseManager
+// (Tests auf die Anforderungen des Auftrags, je Ebene kom/cl/sys).
+function vlErgebnisse(iid){
+  function lies(k){try{return JSON.parse(localStorage.getItem(k)||"null");}catch(e){return null;}}
+  var out={},ab=lies("wb-anforderungsbuch-data"),fe=lies("wb-funktionsentwurf-stand"),tc=lies("wb-testcasemanager-data");
+  var au=ab&&ab.auftraege&&ab.auftraege[iid],ids={};
+  if(au){
+    var n={2:0,3:0,4:0};(au.reqs||[]).forEach(function(r){if(n[r.ebene]!=null)n[r.ebene]++;});
+    var offen=(au.l1||[]).filter(function(x){return x.formuliert===false;}).length;
+    out["SWE.1"]="L1 "+(au.l1||[]).length+(offen?" ("+offen+" offen)":"")+" \u00b7 L2 "+n[2]+" \u00b7 L3 "+n[3]+" \u00b7 L4 "+n[4];
+    (au.l1||[]).forEach(function(x){ids[x.id]=1;});(au.reqs||[]).forEach(function(r){ids[r.id]=1;});
+  }
+  if(fe&&fe.auftrag===iid&&Array.isArray(fe.geaendert))out["SWE.3"]=fe.geaendert.length+" Funktion"+(fe.geaendert.length===1?"":"en")+" ge\u00e4ndert";
+  if(tc&&Array.isArray(tc.tests)&&Object.keys(ids).length){
+    [["SWE.4","kom"],["SWE.5","cl"],["SWE.6","sys"]].forEach(function(z){
+      var t=tc.tests.filter(function(x){return x.ebene===z[1]&&(x.reqs||[]).some(function(r){return ids[r];});});
+      if(!t.length)return;
+      var ok=t.filter(function(x){return x.res==="pass";}).length,f=t.filter(function(x){return x.res==="fail";}).length;
+      out[z[0]]="Tests "+ok+"/"+t.length+(f?" \u00b7 "+f+" \u2717":"");
+    });
+  }
+  return out;
+}
 function vlLesekopie(vl,idx,rels,emps,angemeldet){
   var au=(vl&&vl.auftraege)||{},ix=idx||{};
   var nameById={};(emps||[]).forEach(function(e){if(e)nameById[e.id]=e.name;});
@@ -6547,6 +6694,13 @@ function Planungstool(){
   // der eingeblendeten Liste und loest die V-Workitems danach wieder heraus.
   var s_vlauf=useState(vlLaden);var vlauf=s_vlauf[0],setVlauf=s_vlauf[1];
   var s_vlWahl=useState(null);var vlWahl=s_vlWahl[0],setVlWahl=s_vlWahl[1];
+  var s_vlAktiv=useState(function(){var a=WBAblage.aktiv();return (a&&a.id)||"";});var vlAktivId=s_vlAktiv[0],setVlAktivId=s_vlAktiv[1];
+  var s_vlAblage=useState(0);var setVlAblageNr=s_vlAblage[1];
+  useEffect(function(){
+    function neu(e){if(!e.key||e.key==="wb-aktiver-auftrag"){var a=WBAblage.aktiv();setVlAktivId((a&&a.id)||"");}
+      if(!e.key||/^wb-(anforderungsbuch-data|funktionsentwurf-stand|testcasemanager-data)$/.test(e.key))setVlAblageNr(function(z){return z+1;});}
+    window.addEventListener("storage",neu);return function(){window.removeEventListener("storage",neu);};
+  },[]);
   var releases=useMemo(function(){return vlMerge(releasesRaw,vlauf,issueIdxRaw,employees);},[releasesRaw,vlauf,issueIdxRaw,employees]);
   var issueIdx=useMemo(function(){return vlIndex(issueIdxRaw,vlauf);},[issueIdxRaw,vlauf]);
   var vlRef=useRef({});
@@ -14092,11 +14246,39 @@ function Planungstool(){
     var s=0;(timeEntries||[]).forEach(function(e){if(e&&String(e.wiId)===id)s+=Number(e.seconds)||0;});
     return Math.round(s/360)/10;
   }
+  // v3.2.0: Auftragsordner anlegen (Stufe 2). Steckbrief = Eintrag der Lesekopie
+  // plus Workitems. Ohne Ordnerzugriff im Browser: ZIP mit dem Geruest.
+  function vlSteckbrief(iid){
+    var lk=vlLesekopie(vlRef.current.vl,issueIdxRaw,releases,employees,"");
+    var e=(lk.auftraege||[]).find(function(x){return x.id===iid;})||{id:iid};
+    var a=vlAuftrag(vlRef.current.vl,iid);
+    return Object.assign({},e,{quelle:"kapazitaetenplaner",version:APP_VERSION,erstellt:new Date().toISOString(),
+      workitems:a?vlWisVon(a).map(function(w){return {id:w.id,schritt:w.k,bearbeiter:w.ma,geschaetzt:w.h,rest:w.rest,start:w.start,plan:w.end,istEnde:w.istEnde||"",status:w.lcs,abhaengig:w.deps||[],nachweis:w.nachweis||""};}):[]});
+  }
+  function vlOrdnerAnlegen(iid,x){
+    var sb=vlSteckbrief(iid),titel=(x&&x.t)||iid;
+    function melde(t){setToast(t);setTimeout(function(){setToast(null);},3500);}
+    if(!WBAblage.kann){
+      var z=WBAblage.geruestZip(iid,titel,sb),u=URL.createObjectURL(z.blob),el=document.createElement("a");
+      el.href=u;el.download=z.name+".zip";document.body.appendChild(el);el.click();setTimeout(function(){URL.revokeObjectURL(u);el.remove();},800);
+      vlAendern(function(n){var aa=vlAnlegen(n,iid);aa.ordner=Object.assign({},aa.ordner,{name:z.name,link:aa.ordner.link||WBAblage.linkFuer(z.name)});});
+      melde("Ger\u00fcst als ZIP geladen \u2014 in der Ablage entpacken");return;
+    }
+    WBAblage.wurzel(true).then(function(w){
+      if(!w)return WBAblage.wurzelWaehlen();
+      return w;
+    }).then(function(){return WBAblage.anlegen(iid,titel,sb);}).then(function(o){
+      vlAendern(function(n){var aa=vlAnlegen(n,iid);aa.ordner=Object.assign({},aa.ordner,{name:o.name,link:o.link||aa.ordner.link||"",angelegt:o.angelegt});});
+      var akt=WBAblage.aktiv();if(akt&&akt.id===iid){var na=vlAuftrag(vlRef.current.vl,iid);WBAblage.aktivSetzen(Object.assign({},akt,{ordner:na&&na.ordner}),"kapazitaetenplaner");}
+      melde("Ordner "+o.name+" bereit");
+    }).catch(function(e){if(e&&e.name==="AbortError")return;melde(String((e&&e.message)||e));});
+  }
   function vlPanel(iss){
     var iid=iss.id,x=(issueIdxRaw&&issueIdxRaw[iid])||{},a=vlAuftrag(vlauf,iid);
     var wis=a?vlWisVon(a):[];
     var darf=!!canSeeAll;
     var wahl=vlWahl&&vlWahl.iid===iid?vlWahl:null;
+    var erg=vlErgebnisse(iid); // v3.2.0
     var statusFarbe={"":A.border,"new":A.borderMid,"started":A.sky,"blocked":A.coral,"closed":A.green};
     var statusText={"":"",new:"offen",started:"in Arbeit",blocked:"blockiert",closed:"erledigt"};
     var klein={fontSize:"var(--fs-2xs)",color:A.textLight};
@@ -14136,7 +14318,8 @@ function Planungstool(){
               return vlAvatar(w.ma,20,{key:w.id,blass:w.lcs==="closed",an:wahl&&wahl.ma===w.ma&&wahl.von===s.k,drag:darf&&w.lcs!=="closed",
                 title:vlName(w.ma)+" · "+(w.h||0)+" h · "+(statusText[w.lcs]||w.lcs)+(w.start?"\n"+w.start+" → "+w.end:""),
                 attr:w.lcs==="closed"?{}:ziehbar(w.ma,s.k)});
-            }):React.createElement("span",{style:klein},"—")))
+            }):React.createElement("span",{style:klein},"—")),
+          erg[s.k]?React.createElement("span",{"data-vl-erg":s.k,title:erg[s.k]+" \u2014 R\u00fcckmeldung aus "+s.w,style:Object.assign({},klein,{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",color:A.textMid})},erg[s.k]):null)
       }));
     // ── Mitarbeiter-Leiste ──
     var leiste=darf?React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}},
@@ -14203,7 +14386,15 @@ function Planungstool(){
           style:Object.assign({},eingabe,{width:240})}),
         link?(istWeb?React.createElement("a",{href:link,target:"_blank",rel:"noopener",style:Object.assign({},knopf,{textDecoration:"none"})},"öffnen ↗")
           :React.createElement("button",{type:"button",style:knopf,title:"Netzlaufwerkspfade öffnet der Browser nicht aus einer Webseite heraus",
-            onClick:function(){try{navigator.clipboard.writeText(link);setToast("Pfad kopiert");setTimeout(function(){setToast(null);},2000);}catch(e){}}},"Pfad kopieren")):null),
+            onClick:function(){try{navigator.clipboard.writeText(link);setToast("Pfad kopiert");setTimeout(function(){setToast(null);},2000);}catch(e){}}},"Pfad kopieren")):null,
+        // v3.2.0: Auftragsordner anlegen (Stufe 2) bzw. Steckbrief erneuern
+        React.createElement("button",{type:"button","data-vl-anlegen":iid,style:knopf,
+          title:(a&&a.ordner&&a.ordner.name)?"auftrag.json in 00_Auftrag neu schreiben, fehlende Unterordner anlegen":(WBAblage.kann?"Ordner "+WBAblage.ordnerName(iid,x.t||iid)+" mit Unterordnern in der Ablage anlegen":"Dieser Browser legt keine Ordner an \u2014 ZIP mit dem Ger\u00fcst laden"),
+          onClick:function(){vlOrdnerAnlegen(iid,x);}},(a&&a.ordner&&a.ordner.name)?"Steckbrief aktualisieren":(WBAblage.kann?"Ordner anlegen":"Ordner als ZIP"))),
+      React.createElement("button",{type:"button","data-vl-aktiv":iid,style:Object.assign({},knopf,vlAktivId===iid?{borderColor:A.mint,color:A.mint}:{}),
+        title:"Alle Werkzeuge arbeiten f\u00fcr diesen Auftrag (Anzeige, Ablage in den Auftragsordner)",
+        onClick:function(){var akt=vlAktivId===iid;WBAblage.aktivSetzen(akt?null:{id:iid,titel:x.t||iid,bc:x.bc||"",ordner:(a&&a.ordner)||null},"kapazitaetenplaner");setVlAktivId(akt?"":iid);}},
+        vlAktivId===iid?"\u25cf aktiver Auftrag":"als aktiv setzen"),
       React.createElement("span",{style:{marginLeft:"auto",display:"inline-flex",gap:6}},
         React.createElement("button",{type:"button","data-vl-planen":iid,disabled:!wis.length,style:Object.assign({},knopf,{opacity:wis.length?1:0.5}),
           title:"Offene Workitems nach V-Reihenfolge und Kapazität einplanen. Detailplanung bleibt stehen.",
@@ -14225,9 +14416,20 @@ function Planungstool(){
           React.createElement("input",{type:"number",min:0,max:100,step:1,value:vlauf.anteile[s.k],"data-vl-anteil":s.k,
             onChange:function(e){var v=Math.max(0,Number(e.target.value)||0);vlAendern(function(n){n.anteile[s.k]=v;});},style:Object.assign({},eingabe,{width:48})}),"%");
       })));
+    var ac=WBAblage.cfg();
+    var ablage=React.createElement("details",{style:{marginTop:6}},
+      React.createElement("summary",{style:Object.assign({},klein,{cursor:"pointer",fontWeight:700})},"Ablage der Auftragsordner (f\u00fcr alle Auftr\u00e4ge) \u00b7 "+(ac.name?"Wurzel \u201e"+ac.name+"\u201c":"noch keine Wurzel")),
+      React.createElement("div",{style:{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center",marginTop:4}},
+        React.createElement("button",{type:"button",style:knopf,disabled:!WBAblage.kann,"data-vl-wurzel":"1",
+          onClick:function(){WBAblage.wurzelWaehlen().then(function(){setVlAblageNr(function(z){return z+1;});setToast("Ablage gew\u00e4hlt");setTimeout(function(){setToast(null);},2000);}).catch(function(e){if(e&&e.name!=="AbortError"){setToast(String(e.message||e));setTimeout(function(){setToast(null);},3500);}});}},
+          ac.name?"Wurzel wechseln":"Wurzel w\u00e4hlen"),
+        React.createElement("label",{style:Object.assign({},klein,{display:"inline-flex",gap:5,alignItems:"center"})},"Link der Wurzel",
+          React.createElement("input",{type:"text",defaultValue:ac.link||"","data-vl-wurzellink":"1",placeholder:"https://firma.sharepoint.com/sites/\u2026 oder \\\\server\\projekte",
+            onBlur:function(e){WBAblage.cfgSetzen({link:e.target.value.trim()});setVlAblageNr(function(z){return z+1;});},style:Object.assign({},eingabe,{width:320})})),
+        React.createElement("span",{style:klein},WBAblage.kann?"Netzlaufwerk oder per OneDrive synchronisierter SharePoint-Ordner. Der Link bildet den Ordner-Link je Auftrag.":"Ordner anlegen geht in Chrome und Edge. Hier gibt es das Ger\u00fcst als ZIP.")));
     return React.createElement("div",{"data-vl-panel":iid,onClick:function(e){e.stopPropagation();},
       style:{position:"sticky",left:0,width:1000,boxSizing:"border-box",padding:"10px 14px 12px 34px"}},
-      kopf,leiste,vFeld,tabelle,l1,anteile);
+      kopf,leiste,vFeld,tabelle,l1,anteile,ablage);
   }
 
   function FlowView(){
