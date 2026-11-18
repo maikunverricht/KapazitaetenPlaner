@@ -1250,7 +1250,9 @@ WBTor({
     "ptool_range_end",
     "ptool_auto_emp_colors",
     "ptool_recent_names",
-    "ptool_cq_url"
+    "ptool_cq_url",
+    "ptool_vlauf",
+    "wb-kapazitaetenplaner-auftraege"
   ],
   "demo": {},
   "schreiben": "input[type=\"file\"]",
@@ -2549,7 +2551,10 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="2.99.0";
+var APP_VERSION="3.0.0";
+// v3.0.0: V-Durchlauf je Auftrag -- Mitarbeiter je Prozessschritt (Flow, Drag & Drop),
+//   Workitems im Werkzeug, Grobplanung nach V und Kapazitaet, L1 aus der Issue-Beschreibung,
+//   Lesekopie wb-kapazitaetenplaner-auftraege fuer die V-Werkzeuge.
 // v2.99.0: Import-Briefing -- was sich mit dem neuen Quellenmaterial geaendert
 //   hat. Beim Import vergleicht CAPLAN den bisherigen Plan mit dem neuen Stand
 //   (buildImportDiff, rein): je Workitem neu, geaendert, abgeschlossen,
@@ -4392,6 +4397,8 @@ var CQ_MAPPING=[
   {field:"iss_typ",      label:"Issue-Typ",           src:["Type Issue","Issue Type","Typ Issue","Type"],ci:true},
   {field:"iss_titel",    label:"Issue-Titel",         src:["Titel Issue"]},
   {field:"iss_assignee", label:"Issue-Zuständig",     src:["Assignee Issue"]},
+  {field:"iss_beschr",   label:"Issue-Beschreibung",  src:["Description Issue","Beschreibung Issue","Description","Beschreibung"],ci:true}, // v3.0.0: L1
+  {field:"iss_aufwand",  label:"Issue-Aufwand (h)",   src:["EstimatedEffort Issue","EstimationEffort Issue"],ci:true}, // v3.0.0
   {field:"bc_id",        label:"BC-ID",               src:["hasMappedReleases.hasMappedRelease.id","hasMappedReleases.hasMappedRelease.Id"]},
   {field:"bc_name",      label:"BC-Name",             src:["hasMappedReleases.hasMappedRelease.Title"]},
   {field:"bc_deadline",  label:"BC-Deadline",         src:["hasMappedReleases.hasMappedRelease.PlannedDate"]},
@@ -4442,6 +4449,9 @@ function buildIssueIndex(rows){
     if(isPverTyp(_bt)){x.pver=true;if(x.pvWhy!=="bc"){x.pvWhy="bc";x.pv=row.bc_name||x.pv||"";}}
     else if(isPverTyp(_ft)){x.pver=true;if(!x.pvWhy){x.pvWhy="fc";x.pv=row.fc_name||"";}}
     if(row.iss_typ&&!x.typ)x.typ=String(row.iss_typ);
+    // v3.0.0: L1 (Freitext der Beschreibung) und Aufwand des Issues
+    if(row.iss_beschr&&!x.d)x.d=String(row.iss_beschr).slice(0,20000);
+    if(row.iss_aufwand&&!x.e){var _ef=parseFloat(String(row.iss_aufwand).replace(",","."));if(_ef>0)x.e=_ef;}
     var w=String(row.wi_id||"").trim();
     if(w&&x.wis.indexOf(w)<0)x.wis.push(w);
   });
@@ -4457,6 +4467,166 @@ function isIssueIndex(v){
   return Object.keys(v).every(function(k){var x=v[k];return x&&typeof x==="object"&&Array.isArray(x.wis);});
 }
 if(typeof window!=="undefined"){window.buildIssueIndex=buildIssueIndex;window.isIssueIndex=isIssueIndex;window.isPverTyp=isPverTyp;window.isSwIssue=isSwIssue;window.pverWhy=pverWhy;}
+
+// ════════════════════════════════════════════════════════════════════
+// v3.0.0 — V-DURCHLAUF (Entscheidung Maik, 18.11.2026)
+// Der KapazitaetenPlaner steht ueber dem V: je Auftrag (= Issue) wird das
+// V einmal durchlaufen. Mitarbeiter werden je Prozessschritt zugeordnet,
+// daraus entstehen Workitems (nur im Werkzeug, kein ClearQuest-Schreiben),
+// grob geplant in V-Reihenfolge und nach Kapazitaet.
+// Gespeichert in ptool_vlauf. In releases werden die Workitems nur
+// EINGEBLENDET (vlMerge) und beim Aendern wieder herausgeloest (vlSplit) --
+// ein neuer ClearQuest-Import ersetzt releases und darf sie nicht verwerfen.
+// Lesekopie fuer die V-Werkzeuge: wb-kapazitaetenplaner-auftraege.
+// ════════════════════════════════════════════════════════════════════
+var VL_KEY="ptool_vlauf";
+var VL_LESEKOPIE="wb-kapazitaetenplaner-auftraege";
+var VL_SCHRITTE=[
+  {k:"EIN",  n:"Eingang",          w:"KapazitätenPlaner"},
+  {k:"SWE.1",n:"Anforderung",      w:"Anforderungsbuch"},
+  {k:"SWE.2",n:"Architektur",      w:"Schaltplan"},
+  {k:"SWE.3",n:"Feinentwurf",      w:"Funktionsentwurf"},
+  {k:"SWE.4",n:"Unit",             w:"CodeCompare"},
+  {k:"SWE.5",n:"Integrationstest", w:"TestcaseManager"},
+  {k:"SWE.6",n:"Qualifikation",    w:"TestcaseManager"},
+  {k:"ABS",  n:"Abschluss",        w:"KapazitätenPlaner"}
+];
+// Lage im kleinen V: links in %, oben in px (Kasten 12,5 % breit, 62 px hoch)
+var VL_LAGE={"EIN":[0,0],"SWE.1":[13.5,0],"SWE.2":[21.75,64],"SWE.3":[30,128],"SWE.4":[57.5,128],"SWE.5":[65.75,64],"SWE.6":[74,0],"ABS":[87.5,0]};
+var VL_ANTEILE={"EIN":0,"SWE.1":15,"SWE.2":10,"SWE.3":30,"SWE.4":10,"SWE.5":10,"SWE.6":25,"ABS":0};
+var VL_STATUS=[["new","offen"],["started","in Arbeit"],["blocked","blockiert"],["closed","erledigt"]];
+var VL_AUFWAND_STD=40; // h, wenn das Issue keinen Aufwand mitbringt
+
+function vlLeer(){return {v:1,anteile:Object.assign({},VL_ANTEILE),auftraege:{}};}
+function vlLaden(){
+  var v=null;try{v=JSON.parse(localStorage.getItem(VL_KEY)||"null");}catch(e){v=null;}
+  if(!v||typeof v!=="object"||Array.isArray(v)||!v.auftraege||typeof v.auftraege!=="object"||Array.isArray(v.auftraege))return vlLeer();
+  var an=Object.assign({},VL_ANTEILE);
+  if(v.anteile&&typeof v.anteile==="object")Object.keys(an).forEach(function(k){var x=Number(v.anteile[k]);if(isFinite(x)&&x>=0)an[k]=x;});
+  var au={};
+  Object.keys(v.auftraege).forEach(function(iid){
+    var a=v.auftraege[iid];if(!a||typeof a!=="object")return;
+    var wis={};Object.keys(a.wis||{}).forEach(function(id){var w=a.wis[id];if(w&&typeof w==="object"&&w.k&&w.ma)wis[id]=Object.assign({},w,{id:id,iid:iid});});
+    au[iid]=Object.assign({},a,{iid:iid,wis:wis,ordner:a.ordner&&typeof a.ordner==="object"?a.ordner:{link:""}});
+  });
+  return {v:1,anteile:an,auftraege:au};
+}
+function vlAuftrag(vl,iid){return (vl&&vl.auftraege&&vl.auftraege[iid])||null;}
+function vlWiListe(vl){
+  var out=[];
+  Object.keys((vl&&vl.auftraege)||{}).forEach(function(iid){var a=vl.auftraege[iid];Object.keys(a.wis||{}).forEach(function(id){out.push(a.wis[id]);});});
+  return out;
+}
+function vlKuerzel(name){
+  var t=String(name||"").replace(/,/g," ").trim().split(/\s+/).filter(Boolean);
+  var k=t.map(function(x){return x.charAt(0);}).join("").toUpperCase().replace(/[^A-Z0-9ÄÖÜ]/g,"").slice(0,3);
+  return k||"NN";
+}
+function vlWid(vl,iid,k,name){
+  var belegt={};vlWiListe(vl).forEach(function(w){belegt[w.id]=true;});
+  var b=iid+"-"+k.replace(/\./g,"")+"-"+vlKuerzel(name),id=b,n=2;
+  while(belegt[id])id=b+"-"+(n++);
+  return id;
+}
+function vlSchrittStatus(ws){
+  if(!ws.length)return "";
+  if(ws.every(function(w){return w.lcs==="closed";}))return "closed";
+  if(ws.some(function(w){return w.lcs==="blocked";}))return "blocked";
+  if(ws.some(function(w){return w.lcs==="started"||w.lcs==="closed";}))return "started";
+  return "new";
+}
+// Eingeblendete Pakete (und die Hilfs-Release) aus einer Release-Liste entfernen.
+function vlStrip(rels){
+  if(!Array.isArray(rels))return rels;
+  var any=false;
+  function isV(p){return !!(p&&p._v);}
+  var out=rels.filter(function(r){if(r&&r._v){any=true;return false;}return true;}).map(function(r){
+    if(!r)return r;
+    var dp=r.directPackages||[],comps=r.components||[];
+    var hitD=dp.some(isV),hitC=comps.some(function(c){return (c.packages||[]).some(isV);});
+    if(!hitD&&!hitC)return r;
+    any=true;
+    return Object.assign({},r,{
+      directPackages:dp.filter(function(p){return !isV(p);}),
+      components:comps.map(function(c){return (c.packages||[]).some(isV)?Object.assign({},c,{packages:c.packages.filter(function(p){return !isV(p);})}):c;})
+    });
+  });
+  return any?out:rels;
+}
+// Workitems des V-Durchlaufs als Pakete unter die BC ihres Issues haengen.
+function vlMerge(rels,vl,idx,emps){
+  var base=vlStrip(rels||[]);
+  var wis=vlWiListe(vl);
+  if(!wis.length)return base;
+  var idByName={};(emps||[]).forEach(function(e){if(e&&e.name)idByName[e.name]=e.id;});
+  var byRel={},ohne=[];
+  wis.forEach(function(w){
+    var x=idx&&idx[w.iid],bc=(x&&x.bc)||"";
+    var h=Number(w.h)||0;
+    var p={id:w.id,title:w.titel||w.id,employee:idByName[w.ma]||"",start:w.start||"",end:w.end||w.start||"",
+      hours:h,remainingHours:w.rest!=null?Number(w.rest)||0:h,dependencies:(w.deps||[]).slice(),
+      lcs:w.lcs||"new",issueLcs:"",_v:1,_vIss:w.iid,_vStep:w.k};
+    var r=bc?base.find(function(r){return r&&r.name===bc;}):null;
+    if(r)(byRel[r.id]||(byRel[r.id]=[])).push(p);else ohne.push(p);
+  });
+  var out=base.map(function(r){var add=r&&byRel[r.id];return add?Object.assign({},r,{directPackages:(r.directPackages||[]).concat(add)}):r;});
+  if(ohne.length)out=out.concat([{id:"vl-ohne-bc",_v:1,name:"V-Durchlauf (ohne BC)",dueDate:"",color:"#7c8a9a",components:[],directPackages:ohne}]);
+  return out;
+}
+// Aenderungen an eingeblendeten Paketen (Auslastung, Gantt, Bearbeiten-Dialog)
+// in den V-Durchlauf zurueckschreiben. Datum geaendert -> fix (Detailplanung
+// bleibt beim naechsten automatischen Planen stehen).
+function vlSplit(next,vl,emps){
+  var nameById={};(emps||[]).forEach(function(e){if(e)nameById[e.id]=e.name;});
+  var nv=JSON.parse(JSON.stringify(vl||vlLeer())),seen={},changed=false,heute=dateStr(new Date());
+  function take(p){
+    if(!p||!p._v)return;
+    var a=nv.auftraege[p._vIss],w=a&&a.wis&&a.wis[p.id];if(!w)return;
+    seen[p.id]=true;
+    var upd={titel:p.title||w.titel,ma:nameById[p.employee]||w.ma,h:Number(p.hours)||0,
+      rest:Number(p.remainingHours)||0,start:p.start||"",end:p.end||"",deps:(p.dependencies||[]).slice(),lcs:p.lcs||"new"};
+    var datum=(upd.start!==(w.start||"")||upd.end!==(w.end||""));
+    Object.keys(upd).forEach(function(k){if(JSON.stringify(upd[k])!==JSON.stringify(w[k])){w[k]=upd[k];changed=true;}});
+    if(datum&&!w.fix){w.fix=true;changed=true;}
+    if(w.lcs==="closed"&&!w.istEnde){w.istEnde=heute;changed=true;}
+    if(w.lcs!=="closed"&&w.istEnde){delete w.istEnde;changed=true;}
+  }
+  (next||[]).forEach(function(r){if(!r)return;(r.directPackages||[]).forEach(take);(r.components||[]).forEach(function(c){(c.packages||[]).forEach(take);});});
+  Object.keys(nv.auftraege).forEach(function(iid){var a=nv.auftraege[iid];Object.keys(a.wis||{}).forEach(function(id){if(!seen[id]){delete a.wis[id];changed=true;}});});
+  return {raw:vlStrip(next),vl:nv,changed:changed};
+}
+// Issue-Index um die V-Workitems ergaenzen (Flow summiert ueber idx.wis).
+function vlIndex(idx,vl){
+  var au=(vl&&vl.auftraege)||{},ks=Object.keys(au);
+  if(!idx||!ks.length)return idx;
+  var out=null;
+  ks.forEach(function(iid){
+    var x=idx[iid];if(!x)return;
+    var ids=Object.keys(au[iid].wis||{});if(!ids.length)return;
+    if(!out)out=Object.assign({},idx);
+    out[iid]=Object.assign({},x,{wis:(x.wis||[]).filter(function(w){return ids.indexOf(w)<0;}).concat(ids)});
+  });
+  return out||idx;
+}
+// Lesekopie fuer Anforderungsbuch & Co. (Hoheit bleibt hier).
+function vlLesekopie(vl,idx){
+  var au=(vl&&vl.auftraege)||{};
+  return {quelle:"kapazitaetenplaner",version:APP_VERSION,updated:new Date().toISOString(),
+    schritte:VL_SCHRITTE.map(function(s){return {k:s.k,name:s.n,werkzeug:s.w};}),
+    auftraege:Object.keys(au).map(function(iid){
+      var a=au[iid],x=(idx&&idx[iid])||{},wis=Object.keys(a.wis||{}).map(function(k){return a.wis[k];});
+      var sch={};
+      VL_SCHRITTE.forEach(function(s){
+        var ws=wis.filter(function(w){return w.k===s.k;});if(!ws.length)return;
+        sch[s.k]={mitarbeiter:ws.map(function(w){return w.ma;}),status:vlSchrittStatus(ws),
+          start:ws.reduce(function(m,w){return w.start&&(!m||w.start<m)?w.start:m;},""),
+          ende:ws.reduce(function(m,w){return w.end&&w.end>m?w.end:m;},""),
+          workitems:ws.map(function(w){return w.id;})};
+      });
+      return {id:iid,titel:x.t||iid,lcs:x.l||"",bc:x.bc||"",aufwand:Number(a.aufwand)||0,
+        l1:x.d?[{id:iid+"-L1",t:x.d}]:[],ordner:a.ordner||{link:""},schritte:sch};
+    })};
+}
 
 function normalizeToClearQuestTable(rawRows){
   function _get(row,srcList,ci){for(var i=0;i<srcList.length;i++){var v=row[srcList[i]];if(v!==undefined&&v!==null&&String(v).trim()!="")return String(v).trim();}
@@ -4479,9 +4649,11 @@ function normalizeToClearQuestTable(rawRows){
     if(xml){var m=String(xml).match(/Rem_Eff="([^"]+)"/);if(m&&m[1]){var v=parseFloat(m[1]);if(!isNaN(v)&&v>=0)return v;}
             var m2=String(xml).match(/Tag_Rem_Eff="([^"]+)"/);if(m2&&m2[1]){var v2=parseFloat(m2[1]);if(!isNaN(v2)&&v2>=0)return v2;}}
     return null;}
+  var _beschrDa={}; // v3.0.0: Beschreibung nur in der ersten Zeile je Issue (Speicher)
   return rawRows.map(function(row){
     var n={};
     CQ_MAPPING.forEach(function(m){n[m.field]=_get(row,m.src,m.ci);});
+    if(n.iss_beschr){if(_beschrDa[n.iss_id])n.iss_beschr="";else _beschrDa[n.iss_id]=true;}
     ["wi_start","wi_end","bc_deadline","fc_deadline","bc_committed"].forEach(function(f){if(n[f])n[f]=_pd(n[f])||n[f];}); // v2.96.5: bc_committed
     if(n.wi_assignee){if(!n.wi_abteilung)n.wi_abteilung=_cd(n.wi_assignee);n.wi_assignee=_cn(n.wi_assignee);}
     // Aufwand: R_Eff → EstimationEffort → 8h  (identisch zu parseClearQuest)
@@ -4516,7 +4688,7 @@ function RohdatenView(props){
   var s_vc=useState(null);var vc=s_vc[0],setVc=s_vc[1];
 
   var DEFAULT=["wi_id","wi_titel","wi_assignee","wi_abteilung","wi_status","wi_aufwand_h","wi_rem_h","wi_start","wi_end","bc_name","bc_deadline","bc_id","fc_name","fc_deadline","fc_id","iss_id","iss_status"];
-  var ALL=CQ_MAPPING.filter(function(m){return m.field!="_tags_xml";}).map(function(m){return m.field;});
+  var ALL=CQ_MAPPING.filter(function(m){return m.field!="_tags_xml"&&m.field!="iss_beschr";}).map(function(m){return m.field;});
   var vis=vc||DEFAULT;
   var lbl={};CQ_MAPPING.forEach(function(m){lbl[m.field]=m.label;});
   var PAGE=50;
@@ -6175,7 +6347,7 @@ function Planungstool(){
   // Speicher sind, und separat gesichert -- er ueberlebt damit auch einen
   // Neustart, nach dem die Rohdaten nicht mehr gespeichert werden konnten.
   var s_issueIdx=useState(function(){var v=lsLoad("ptool_issues",null);return isIssueIndex(v)?v:null;});
-  var issueIdx=s_issueIdx[0],setIssueIdx=s_issueIdx[1];
+  var issueIdxRaw=s_issueIdx[0],setIssueIdx=s_issueIdx[1]; // v3.0.0: issueIdx (mit V-Workitems) steht weiter unten
   useEffect(function(){
     if(rawData&&rawData.length){
       var idx=buildIssueIndex(rawData);
@@ -6344,7 +6516,31 @@ function Planungstool(){
       isPlainObj,healRelease);
     return v!=null?v:DEMO_RELEASES;
   });
-  var releases=s_releases[0],setReleases=s_releases[1];
+  var releasesRaw=s_releases[0],setReleasesRaw=s_releases[1];
+  // v3.0.0: V-Durchlauf. releases = Import + eingeblendete V-Workitems.
+  // Alle setReleases-Aufrufe gehen ueber den Wrapper unten: er rechnet auf
+  // der eingeblendeten Liste und loest die V-Workitems danach wieder heraus.
+  var s_vlauf=useState(vlLaden);var vlauf=s_vlauf[0],setVlauf=s_vlauf[1];
+  var s_vlWahl=useState(null);var vlWahl=s_vlWahl[0],setVlWahl=s_vlWahl[1];
+  var releases=useMemo(function(){return vlMerge(releasesRaw,vlauf,issueIdxRaw,employees);},[releasesRaw,vlauf,issueIdxRaw,employees]);
+  var issueIdx=useMemo(function(){return vlIndex(issueIdxRaw,vlauf);},[issueIdxRaw,vlauf]);
+  var vlRef=useRef({});
+  vlRef.current={raw:releasesRaw,vl:vlauf,idx:issueIdxRaw,emps:employees};
+  function setReleases(upd){
+    if(typeof upd!=="function"){setReleasesRaw(vlStrip(upd));return;}
+    setReleasesRaw(function(prevRaw){
+      var r=vlRef.current,merged=vlMerge(prevRaw,r.vl,r.idx,r.emps),next=upd(merged);
+      if(next===merged)return prevRaw;
+      var sp=vlSplit(next,r.vl,r.emps);
+      if(sp.changed){r.vl=sp.vl;setTimeout(function(){setVlauf(sp.vl);},0);}
+      return sp.raw;
+    });
+  }
+  useEffect(function(){
+    try{localStorage.setItem(VL_KEY,JSON.stringify(vlauf));}catch(e){}
+    if(window.WBTor&&WBTor.beispiel&&WBTor.beispiel())return;
+    try{localStorage.setItem(VL_LESEKOPIE,JSON.stringify(vlLesekopie(vlauf,issueIdxRaw)));}catch(e){}
+  },[vlauf,issueIdxRaw]);
   var s_absences=useState(function(){
     var v=safeList("ptool_absences","Abwesenheiten",lsLoad("ptool_absences",null),
       function(x){return isPlainObj(x)&&(x.employee!=null||x.employeeName!=null);});
@@ -13765,6 +13961,238 @@ function Planungstool(){
   // ════════════════════════════════════════════════════════════════════
   // FlowView – Issue-Board mit horizontalen Swimlanes
   // ════════════════════════════════════════════════════════════════════
+  // ═════════════════════════════════════════════════════════════════
+  // v3.0.0: V-Durchlauf je Auftrag -- Zuordnung, Workitems, Grobplanung
+  // ═════════════════════════════════════════════════════════════════
+  function vlAendern(fn){
+    var n=JSON.parse(JSON.stringify(vlRef.current.vl||vlLeer()));
+    fn(n);vlRef.current.vl=n;setVlauf(n);
+  }
+  function vlAnlegen(n,iid){
+    var a=n.auftraege[iid];
+    if(!a){
+      var x=(issueIdxRaw&&issueIdxRaw[iid])||{};
+      a=n.auftraege[iid]={iid:iid,aufwand:x.e||VL_AUFWAND_STD,wis:{},ordner:{link:""},angelegt:dateStr(new Date())};
+    }
+    if(!a.wis)a.wis={};if(!a.ordner)a.ordner={link:""};
+    return a;
+  }
+  function vlWisVon(a,k){return Object.keys(a.wis||{}).map(function(id){return a.wis[id];}).filter(function(w){return !k||w.k===k;});}
+  // Schrittaufwand = Auftragsaufwand x Anteil, gleich auf die offenen,
+  // nicht von Hand geschaetzten Workitems des Schritts verteilt (min. 1 h).
+  function vlVerteilen(n,a,k){
+    var ws=vlWisVon(a,k).filter(function(w){return w.lcs!=="closed"&&!w.hFix;});
+    if(!ws.length)return;
+    var soll=(Number(a.aufwand)||0)*(Number(n.anteile[k])||0)/100;
+    var fest=vlWisVon(a,k).filter(function(w){return w.lcs==="closed"||w.hFix;}).reduce(function(s,w){return s+(Number(w.h)||0);},0);
+    var h=Math.max(1,Math.round(Math.max(0,soll-fest)/ws.length*2)/2);
+    ws.forEach(function(w){var weg=Math.max(0,(Number(w.h)||0)-(w.rest!=null?Number(w.rest):Number(w.h)||0));w.h=h;w.rest=Math.max(0,h-weg);});
+  }
+  // Grobplanung: Vorgaenger = alle Workitems des vorigen belegten Schritts,
+  // Termine aus der Prognose (runAnalysis bucht freie Stunden je Mitarbeiter,
+  // fruehestes BC-Ziel zuerst). alle=true ueberschreibt auch Detailplanung.
+  function vlPlanenIn(n,iid,alle){
+    var a=n.auftraege[iid];if(!a)return;
+    var prev=[];
+    VL_SCHRITTE.forEach(function(s){
+      var ws=vlWisVon(a,s.k);if(!ws.length)return;
+      ws.forEach(function(w){w.deps=prev.slice();});
+      prev=ws.map(function(w){return w.id;});
+    });
+    var heute=dateStr(new Date());
+    var offen=vlWisVon(a).filter(function(w){return w.lcs!=="closed"&&(alle||!w.fix||!w.start);});
+    if(!offen.length)return;
+    offen.forEach(function(w){w.start=heute;w.end=heute;if(alle)delete w.fix;});
+    var r=vlRef.current;
+    var res=runAnalysis(vlMerge(r.raw,n,r.idx,r.emps),employees,absences,absenceMap)||[];
+    res.forEach(function(x){
+      if(!x||!x.pkg||!x.pkg._v||x.pkg._vIss!==iid)return;
+      var w=a.wis[x.pkg.id];if(!w||offen.indexOf(w)<0)return;
+      w.start=x.planStart||heute;w.end=x.capEnd||w.start;
+    });
+  }
+  function vlZuordnen(iid,k,ma,von){
+    if(!ma)return;
+    vlAendern(function(n){
+      var a=vlAnlegen(n,iid),titel=(issueIdxRaw&&issueIdxRaw[iid]&&issueIdxRaw[iid].t)||iid;
+      if(von&&von!==k){
+        vlWisVon(a,von).forEach(function(w){if(w.ma===ma&&w.lcs!=="closed")delete a.wis[w.id];});
+        vlVerteilen(n,a,von);
+      }
+      if(k&&!vlWisVon(a,k).some(function(w){return w.ma===ma;})){
+        var s=VL_SCHRITTE.find(function(x){return x.k===k;}),id=vlWid(n,iid,k,ma);
+        a.wis[id]={id:id,iid:iid,k:k,ma:ma,titel:k+" "+s.n+" · "+titel,h:0,rest:0,start:"",end:"",deps:[],lcs:"new"};
+      }
+      if(k)vlVerteilen(n,a,k);
+      vlPlanenIn(n,iid,false);
+    });
+    setVlWahl(null);
+  }
+  function vlWi(iid,id,fn){
+    vlAendern(function(n){var a=n.auftraege[iid],w=a&&a.wis[id];if(!w)return;fn(w,a,n);});
+  }
+  function vlDragDaten(e){
+    try{var t=e.dataTransfer.getData("text/plain");if(t&&t.indexOf("vl:")===0)return JSON.parse(t.slice(3));}catch(x){}
+    return null;
+  }
+  function vlName(name){
+    var e=employees.find(function(x){return x.name===name;});
+    if(canSeeAll||(selfEmp&&e&&e.id===selfEmp.id))return name;
+    return FLOW_OTHERS;
+  }
+  function vlAvatar(name,size,opt){
+    opt=opt||{};
+    var e=employees.find(function(x){return x.name===name;}),i=employees.indexOf(e);
+    var lbl=vlName(name);
+    return React.createElement("span",Object.assign({key:opt.key||name,title:opt.title||lbl,"data-vl-ava":name,
+      style:{width:size,height:size,borderRadius:"50%",background:e?getEmpColor(e,i):A.textLight,color:"var(--c-on-accent)",
+        display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:size>=26?"var(--fs-2xs)":"var(--fs-micro)",
+        fontWeight:800,flexShrink:0,userSelect:"none",cursor:opt.drag?"grab":"default",
+        boxShadow:opt.an?"0 0 0 2px var(--c-surface), 0 0 0 4px "+A.mint:(opt.blass?"none":"0 1px 2px rgba(0,0,0,.15)"),
+        opacity:opt.blass?0.45:1}},opt.attr||{}),lbl===FLOW_OTHERS?"•":getInitials(lbl));
+  }
+  function vlGeleistet(id){
+    var s=0;(timeEntries||[]).forEach(function(e){if(e&&String(e.wiId)===id)s+=Number(e.seconds)||0;});
+    return Math.round(s/360)/10;
+  }
+  function vlPanel(iss){
+    var iid=iss.id,x=(issueIdxRaw&&issueIdxRaw[iid])||{},a=vlAuftrag(vlauf,iid);
+    var wis=a?vlWisVon(a):[];
+    var darf=!!canSeeAll;
+    var wahl=vlWahl&&vlWahl.iid===iid?vlWahl:null;
+    var statusFarbe={"":A.border,"new":A.borderMid,"started":A.sky,"blocked":A.coral,"closed":A.green};
+    var statusText={"":"",new:"offen",started:"in Arbeit",blocked:"blockiert",closed:"erledigt"};
+    var klein={fontSize:"var(--fs-2xs)",color:A.textLight};
+    var eingabe={background:A.surface,border:"1px solid "+A.border,borderRadius:"var(--r-sm)",padding:"2px 5px",fontSize:"var(--fs-xs)",color:A.text};
+    function aufStep(k){
+      return {
+        onDragOver:function(e){if(darf){e.preventDefault();e.dataTransfer.dropEffect="move";}},
+        onDrop:function(e){e.preventDefault();var d=vlDragDaten(e);if(d&&d.iid===iid)vlZuordnen(iid,k,d.ma,d.von||"");},
+        onClick:function(){if(wahl)vlZuordnen(iid,k,wahl.ma,wahl.von||"");}
+      };
+    }
+    function ziehbar(ma,von){
+      if(!darf)return {};
+      return {draggable:true,
+        onDragStart:function(e){e.stopPropagation();e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain","vl:"+JSON.stringify({iid:iid,ma:ma,von:von||""}));},
+        onClick:function(e){e.stopPropagation();setVlWahl(wahl&&wahl.ma===ma&&(wahl.von||"")===(von||"")?null:{iid:iid,ma:ma,von:von||""});}};
+    }
+    // ── kleines V ──
+    var mitte=function(k){var l=VL_LAGE[k];return [l[0]+6.25,l[1]+31];};
+    var linie=VL_SCHRITTE.map(function(s){var m=mitte(s.k);return m[0]+","+m[1];}).join(" ");
+    var vFeld=React.createElement("div",{"data-vl-v":iid,style:{position:"relative",height:194,minWidth:760}},
+      React.createElement("svg",{viewBox:"0 0 100 194",preserveAspectRatio:"none",style:{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}},
+        React.createElement("polyline",{points:linie,fill:"none",stroke:A.borderMid,strokeWidth:1.5,vectorEffect:"non-scaling-stroke",strokeDasharray:"4 3"})),
+      VL_SCHRITTE.map(function(s){
+        var l=VL_LAGE[s.k],ws=wis.filter(function(w){return w.k===s.k;}),st=vlSchrittStatus(ws);
+        var ziel=!!wahl&&darf;
+        return React.createElement("div",Object.assign({key:s.k,"data-vl-step":s.k,
+          title:s.k+" · "+s.n+" ("+s.w+")"+(st?"\nStatus: "+statusText[st]:"")+(darf?"\nMitarbeiter hierher ziehen":""),
+          style:{position:"absolute",left:l[0]+"%",top:l[1],width:"12.5%",height:62,boxSizing:"border-box",
+            background:A.surface,border:(ziel?"1.5px dashed "+A.mint:"1px solid "+A.border),borderTop:"3px solid "+statusFarbe[st],
+            borderRadius:"var(--r-md)",padding:"3px 5px",display:"flex",flexDirection:"column",gap:2,cursor:ziel?"copy":"default",overflow:"hidden"}},aufStep(s.k)),
+          React.createElement("div",{style:{display:"flex",justifyContent:"space-between",gap:4,alignItems:"baseline"}},
+            React.createElement("b",{style:{fontSize:"var(--fs-2xs)",color:A.text,whiteSpace:"nowrap"}},s.k==="EIN"||s.k==="ABS"?s.n:s.k),
+            React.createElement("span",{style:Object.assign({},klein,{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"})},s.k==="EIN"||s.k==="ABS"?"":s.n)),
+          React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:3,minHeight:20}},
+            ws.length?ws.map(function(w){
+              return vlAvatar(w.ma,20,{key:w.id,blass:w.lcs==="closed",an:wahl&&wahl.ma===w.ma&&wahl.von===s.k,drag:darf&&w.lcs!=="closed",
+                title:vlName(w.ma)+" · "+(w.h||0)+" h · "+(statusText[w.lcs]||w.lcs)+(w.start?"\n"+w.start+" → "+w.end:""),
+                attr:w.lcs==="closed"?{}:ziehbar(w.ma,s.k)});
+            }):React.createElement("span",{style:klein},"—")))
+      }));
+    // ── Mitarbeiter-Leiste ──
+    var leiste=darf?React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}},
+      React.createElement("span",{style:Object.assign({},klein,{fontWeight:700,letterSpacing:".04em"})},"MITARBEITER"),
+      React.createElement("div",{style:{display:"flex",gap:4,flexWrap:"wrap"}},
+        employees.slice().sort(function(p,q){return String(p.name).localeCompare(String(q.name));}).map(function(e){
+          return vlAvatar(e.name,26,{key:e.id,drag:true,an:wahl&&wahl.ma===e.name&&!wahl.von,attr:ziehbar(e.name,"")});
+        })),
+      React.createElement("div",{"data-vl-weg":iid,
+        onDragOver:function(e){e.preventDefault();},
+        onDrop:function(e){e.preventDefault();var d=vlDragDaten(e);if(d&&d.iid===iid&&d.von)vlZuordnen(iid,null,d.ma,d.von);},
+        onClick:function(){if(wahl&&wahl.von)vlZuordnen(iid,null,wahl.ma,wahl.von);},
+        style:{marginLeft:"auto",border:"1px dashed "+(wahl&&wahl.von?A.coral:A.border),borderRadius:"var(--r-md)",padding:"4px 10px",
+          fontSize:"var(--fs-2xs)",color:wahl&&wahl.von?A.coral:A.textLight,cursor:wahl&&wahl.von?"pointer":"default"}},"✕ hierher = entfernen"),
+      React.createElement("span",{style:klein},wahl?(wahl.von?"Ziel-Schritt antippen oder entfernen":"Schritt antippen"):"Ziehen oder antippen"))
+      :React.createElement("div",{style:Object.assign({},klein,{marginBottom:8})},"Zuordnen geht nur in der erweiterten Ansicht.");
+    // ── Workitems ──
+    var reihen=wis.slice().sort(function(p,q){
+      var ip=VL_SCHRITTE.findIndex(function(s){return s.k===p.k;}),iq=VL_SCHRITTE.findIndex(function(s){return s.k===q.k;});
+      return ip-iq||String(p.ma).localeCompare(String(q.ma));
+    });
+    var th=function(t,tip){return React.createElement("th",{title:tip||"",style:{textAlign:"left",padding:"3px 6px",fontWeight:600,color:A.textMid,fontSize:"var(--fs-2xs)",whiteSpace:"nowrap",borderBottom:"1px solid "+A.border}},t);};
+    var td=function(c,st){return React.createElement("td",{style:Object.assign({padding:"3px 6px",fontSize:"var(--fs-xs)",whiteSpace:"nowrap",borderBottom:"1px solid "+alpha(A.border,"55")},st||{})},c);};
+    var tabelle=reihen.length?React.createElement("table",{"data-vl-wis":iid,style:{borderCollapse:"collapse",marginTop:8,minWidth:760}},
+      React.createElement("thead",null,React.createElement("tr",null,
+        th("Workitem"),th("Schritt"),th("Bearbeiter"),th("Geschätzt","Geschätzter Aufwand (h). Von Hand geändert = fest"),th("Geleistet","Aus der Zeiterfassung (h)"),
+        th("Rest"),th("Start"),th("Plandatum"),th("Ist-Ende"),th("Status"),th("Abhängig von"),th("Nachweis","Pfad im Auftragsordner"))),
+      React.createElement("tbody",null,reihen.map(function(w){
+        var deps=(w.deps||[]);
+        return React.createElement("tr",{key:w.id,"data-vl-wi":w.id},
+          td(React.createElement("span",{style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-2xs)"}},w.id)),
+          td(w.k),
+          td(React.createElement("span",{style:{display:"inline-flex",gap:5,alignItems:"center"}},vlAvatar(w.ma,18,{}),vlName(w.ma))),
+          td(React.createElement("input",{type:"number",min:0,step:0.5,value:w.h,"data-vl-h":w.id,title:w.hFix?"fest (von Hand)":"aus Anteil",
+            onChange:function(e){var v=Math.max(0,Number(e.target.value)||0);vlWi(iid,w.id,function(z){var weg=Math.max(0,(z.h||0)-(z.rest||0));z.h=v;z.rest=Math.max(0,v-weg);z.hFix=true;});},
+            style:Object.assign({},eingabe,{width:56,fontWeight:w.hFix?700:400})})),
+          td(vlGeleistet(w.id)+" h",{color:A.textMid}),
+          td(React.createElement("input",{type:"number",min:0,step:0.5,value:w.rest!=null?w.rest:w.h,
+            onChange:function(e){var v=Math.max(0,Number(e.target.value)||0);vlWi(iid,w.id,function(z){z.rest=v;});},style:Object.assign({},eingabe,{width:56})})),
+          td(w.start||"–"),
+          td(w.end||"–",{fontWeight:w.fix?700:400,title:w.fix?"Detailplanung (bleibt beim Planen stehen)":""}),
+          td(w.istEnde||"–"),
+          td(React.createElement("select",{value:w.lcs||"new","data-vl-status":w.id,
+            onChange:function(e){var v=e.target.value;vlWi(iid,w.id,function(z){z.lcs=v;if(v==="closed"){z.istEnde=dateStr(new Date());z.rest=0;}else delete z.istEnde;});},
+            style:eingabe},VL_STATUS.map(function(o){return React.createElement("option",{key:o[0],value:o[0]},o[1]);}))),
+          td(deps.length?React.createElement("span",{title:deps.join("\n"),style:{cursor:"help"}},deps.length===1?deps[0]:deps.length+" WI"):"–",{color:A.textMid}),
+          td(React.createElement("input",{type:"text",value:w.nachweis||"",placeholder:"z. B. 04_Review/…",
+            onChange:function(e){var v=e.target.value;vlWi(iid,w.id,function(z){z.nachweis=v;});},style:Object.assign({},eingabe,{width:150})}))
+        );
+      }))):React.createElement("div",{style:Object.assign({},klein,{marginTop:8})},"Noch keine Workitems — Mitarbeiter auf einen Schritt ziehen.");
+    // ── Kopf: Aufwand, Ordner, Planen ──
+    var link=(a&&a.ordner&&a.ordner.link)||"";
+    var istWeb=/^https?:\/\//i.test(link);
+    var knopf={background:A.surface,border:"1px solid "+A.border,borderRadius:"var(--r-pill)",padding:"3px 10px",fontSize:"var(--fs-xs)",cursor:"pointer",color:A.text};
+    var kopf=React.createElement("div",{style:{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:8}},
+      React.createElement("b",{style:{fontSize:"var(--fs-sm)",color:A.text}},"V-Durchlauf"),
+      React.createElement("label",{style:Object.assign({},klein,{display:"inline-flex",gap:5,alignItems:"center"})},"Auftragsaufwand",
+        React.createElement("input",{type:"number",min:0,step:1,"data-vl-aufwand":iid,value:a?a.aufwand:(x.e||VL_AUFWAND_STD),
+          onChange:function(e){var v=Math.max(0,Number(e.target.value)||0);vlAendern(function(n){var aa=vlAnlegen(n,iid);aa.aufwand=v;VL_SCHRITTE.forEach(function(s){vlVerteilen(n,aa,s.k);});});},
+          style:Object.assign({},eingabe,{width:64})}),"h"),
+      React.createElement("label",{style:Object.assign({},klein,{display:"inline-flex",gap:5,alignItems:"center"})},"Ordner",
+        React.createElement("input",{type:"text",value:link,"data-vl-ordner":iid,placeholder:"SharePoint-URL oder \\\\server\\…",
+          onChange:function(e){var v=e.target.value;vlAendern(function(n){vlAnlegen(n,iid).ordner.link=v;});},
+          style:Object.assign({},eingabe,{width:240})}),
+        link?(istWeb?React.createElement("a",{href:link,target:"_blank",rel:"noopener",style:Object.assign({},knopf,{textDecoration:"none"})},"öffnen ↗")
+          :React.createElement("button",{type:"button",style:knopf,title:"Netzlaufwerkspfade öffnet der Browser nicht aus einer Webseite heraus",
+            onClick:function(){try{navigator.clipboard.writeText(link);setToast("Pfad kopiert");setTimeout(function(){setToast(null);},2000);}catch(e){}}},"Pfad kopieren")):null),
+      React.createElement("span",{style:{marginLeft:"auto",display:"inline-flex",gap:6}},
+        React.createElement("button",{type:"button","data-vl-planen":iid,disabled:!wis.length,style:Object.assign({},knopf,{opacity:wis.length?1:0.5}),
+          title:"Offene Workitems nach V-Reihenfolge und Kapazität einplanen. Detailplanung bleibt stehen.",
+          onClick:function(){vlAendern(function(n){vlPlanenIn(n,iid,false);});}},"Planen"),
+        React.createElement("button",{type:"button",disabled:!wis.length,style:Object.assign({},knopf,{opacity:wis.length?1:0.5}),
+          title:"Alle offenen Workitems neu einplanen — überschreibt auch die Detailplanung.",
+          onClick:function(){vlAendern(function(n){vlPlanenIn(n,iid,true);});}},"Alles neu planen")));
+    // ── L1 und Anteile ──
+    var l1=React.createElement("details",{style:{marginTop:8}},
+      React.createElement("summary",{style:Object.assign({},klein,{cursor:"pointer",fontWeight:700})},"L1 · Kundenanforderung (Beschreibung des Issues)"),
+      x.d?React.createElement("div",{"data-vl-l1":iid,style:{whiteSpace:"pre-wrap",fontSize:"var(--fs-xs)",color:A.text,maxHeight:180,overflow:"auto",
+        background:A.surface,border:"1px solid "+A.border,borderRadius:"var(--r-md)",padding:"6px 8px",marginTop:4}},x.d)
+        :React.createElement("div",{style:Object.assign({},klein,{marginTop:4})},"Keine Beschreibung im Import. Erwartet wird die Spalte „Description Issue“ oder „Beschreibung Issue“ der Austausch-Excel."));
+    var summe=VL_SCHRITTE.reduce(function(s,x){return s+(Number(vlauf.anteile[x.k])||0);},0);
+    var anteile=React.createElement("details",{style:{marginTop:6}},
+      React.createElement("summary",{style:Object.assign({},klein,{cursor:"pointer",fontWeight:700})},"Aufwandsanteile je Schritt (für alle Aufträge) · Summe "+summe+" %"),
+      React.createElement("div",{style:{display:"flex",gap:10,flexWrap:"wrap",marginTop:4}},VL_SCHRITTE.map(function(s){
+        return React.createElement("label",{key:s.k,style:Object.assign({},klein,{display:"inline-flex",gap:4,alignItems:"center"})},s.k==="EIN"||s.k==="ABS"?s.n:s.k,
+          React.createElement("input",{type:"number",min:0,max:100,step:1,value:vlauf.anteile[s.k],"data-vl-anteil":s.k,
+            onChange:function(e){var v=Math.max(0,Number(e.target.value)||0);vlAendern(function(n){n.anteile[s.k]=v;});},style:Object.assign({},eingabe,{width:48})}),"%");
+      })));
+    return React.createElement("div",{"data-vl-panel":iid,onClick:function(e){e.stopPropagation();},
+      style:{position:"sticky",left:0,width:1000,boxSizing:"border-box",padding:"10px 14px 12px 34px"}},
+      kopf,leiste,vFeld,tabelle,l1,anteile);
+  }
+
   function FlowView(){
     // v2.93.0: Sichtschutz -- das elfte Leck derselben Bauart. Flow nannte
     // gesperrt in Team, Timeline und Karten die Namen aller Entwickler. Der
@@ -14729,6 +15157,9 @@ function Planungstool(){
             },React.createElement("div",{className:"flowcell"},renderCell(iss,col)));
           })
         ),
+        // v3.0.0: V-Durchlauf des Auftrags
+        isExp&&!iss.isWi&&React.createElement("tr",{key:"vl-"+iss.id,style:{background:A.bg,borderBottom:"1px solid "+A.border}},
+          React.createElement("td",{colSpan:visCols.length+1,style:{padding:0}},vlPanel(iss))),
         // WI-Detail-Zeilen
         isExp&&iss.wis.map(function(pkg){
           var emp=employees.find(function(e){return e.id===pkg.employee;});
