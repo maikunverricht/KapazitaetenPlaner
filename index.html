@@ -2551,7 +2551,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.4.2";
+var APP_VERSION="3.4.3";
+// v3.4.3: Auftragsordner – vorhandenen Ordner zur Issue-ID weiterverwenden; beim Oeffnen/Fokus pruefen, ob die Ordner noch da sind (fehlt/umbenannt).
 // v3.4.2: Flow aufgeklappt -- vollstaendige Workitem-Liste (auch closed, Ausgeblendete, ohne Release), keine doppelten Zeilen mehr.
 // v3.4.1: Lesekopie traegt Plandaten der FCs (fcPlan) fuer die Issue-Kacheln im Kontor.
 // v3.4.0: ClearQuest-Workitems den Prozessschritten zuordnen (ersetzen eigene), Flow: BC nur BC-Release, FC nur verknuepfte FCs, Auftraege ausblenden; Szenarien dauerhaft aus.
@@ -4577,13 +4578,33 @@ if(typeof window!=="undefined"){window.buildIssueIndex=buildIssueIndex;window.is
     const w = await f.createWritable(); await w.write(inhalt); await w.close();
   }
   /* Ordner samt Gerüst anlegen; vorhandene Dateien bleiben unberührt (außer auftrag.json). */
+  /* Vorhandenen Auftragsordner zur Issue-ID suchen: „<ID>“ oder „<ID>_…“ (auch umbenannt/von Hand angelegt).
+     Ergebnis: Name | '' (keiner da) | null (kein Zugriff auf die Wurzel) */
+  async function finde(iid, fragen){
+    const w = await wurzel(fragen); if (!w) return null;
+    const id = String(iid).replace(/[\\/:*?"<>|]+/g, ''), treffer = [];
+    for await (const [n, h] of w.entries()) if (h.kind === 'directory' && (n === id || n.startsWith(id + '_'))) treffer.push(n);
+    treffer.sort(); return treffer[0] || '';
+  }
+  /* Gibt es den gespeicherten Ordner noch? Fragt nicht nach Rechten.
+     { stand:'ok'|'umbenannt'|'fehlt'|'unbekannt', name } */
+  async function pruefen(iid, name){
+    try {
+      const w = await wurzel(false); if (!w) return { stand:'unbekannt', name };
+      if (name) { try { await w.getDirectoryHandle(name, { create:false }); return { stand:'ok', name }; } catch (e) { if (e && e.name !== 'NotFoundError' && e.name !== 'TypeMismatchError') throw e; } }
+      const da = await finde(iid, false);
+      return da ? { stand:'umbenannt', name:da } : { stand:'fehlt', name };
+    } catch (e) { return { stand:'unbekannt', name }; }
+  }
   async function anlegen(iid, titel, steckbrief){
-    const name = ordnerName(iid, titel);
+    /* vorhandenen Ordner zur ID weiterverwenden statt einen zweiten anzulegen */
+    let da = ''; try { da = await finde(iid, true); } catch (e) {}
+    const name = da || ordnerName(iid, titel);
     const dir = await auftragsordner(name, true, true);
     if (!dir) throw new Error(kann ? 'Kein Zugriff auf die Ablage – erst die Wurzel wählen.' : 'Dieser Browser kann keine Ordner anlegen.');
     for (const u of UNTER) await dir.getDirectoryHandle(u, { create:true });
     await schreibenIn(dir, '00_Auftrag/auftrag.json', JSON.stringify(steckbrief || { id:iid, titel }, null, 2));
-    return { name, link:linkFuer(name), angelegt:new Date().toISOString().slice(0, 10) };
+    return { name, link:linkFuer(name), angelegt:new Date().toISOString().slice(0, 10), vorhanden:!!da };
   }
   /* Datei in den Unterordner des Auftrags legen. true = abgelegt, false = nicht möglich. */
   async function ablegen(ordner, unter, dateiname, inhalt){
@@ -4640,7 +4661,7 @@ if(typeof window!=="undefined"){window.buildIssueIndex=buildIssueIndex;window.is
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
     return 'download';
   }
-  window.WBAblage = { UNTER, kann, cfg, cfgSetzen, ordnerName, linkFuer, wurzelWaehlen, wurzel, anlegen, ablegen, geruestZip, aktiv, aktivSetzen, ordnerVon, sichern };
+  window.WBAblage = { UNTER, kann, cfg, cfgSetzen, ordnerName, linkFuer, wurzelWaehlen, wurzel, finde, pruefen, anlegen, ablegen, geruestZip, aktiv, aktivSetzen, ordnerVon, sichern };
 })();
 
 var VL_KEY="ptool_vlauf";
@@ -6792,6 +6813,33 @@ function Planungstool(){
   var issueIdx=useMemo(function(){return vlIndex(issueIdxRaw,vlauf);},[issueIdxRaw,vlauf]);
   var vlRef=useRef({});
   vlRef.current={raw:releasesRaw,vl:vlauf,idx:issueIdxRaw,emps:employees};
+  // v3.4.3: gibt es die Auftragsordner noch? (nur mit freigegebener Wurzel, fragt nicht nach Rechten)
+  useEffect(function(){
+    var lauf=false,tot=false;
+    function pruef(){
+      if(lauf||tot||!window.WBAblage||!WBAblage.kann)return;
+      var vl=vlRef.current&&vlRef.current.vl;if(!vl||!vl.auftraege)return;
+      var ids=Object.keys(vl.auftraege).filter(function(i){var o=vl.auftraege[i].ordner;return o&&o.name;});if(!ids.length)return;
+      lauf=true;
+      Promise.all(ids.map(function(i){return WBAblage.pruefen(i,vl.auftraege[i].ordner.name).then(function(r){return [i,r];});})).then(function(rs){
+        if(tot)return;
+        var cur=vlRef.current.vl;
+        var aend=rs.filter(function(p){var a=cur.auftraege[p[0]];if(!a||!a.ordner||p[1].stand==="unbekannt")return false;
+          return p[1].stand==="umbenannt"||!!a.ordner.fehlt!==(p[1].stand==="fehlt");});
+        if(!aend.length)return;
+        vlAendern(function(n){aend.forEach(function(p){var o=n.auftraege[p[0]].ordner,r=p[1];
+          if(r.stand==="umbenannt"){var alt=o.name;o.name=r.name;if(!o.link||o.link===WBAblage.linkFuer(alt))o.link=WBAblage.linkFuer(r.name);}
+          if(r.stand==="fehlt")o.fehlt=true;else delete o.fehlt;});});
+        var akt=WBAblage.aktiv();
+        if(akt&&aend.some(function(p){return p[0]===akt.id;})){var na=vlRef.current.vl.auftraege[akt.id];WBAblage.aktivSetzen(Object.assign({},akt,{ordner:na&&na.ordner}),"kapazitaetenplaner");}
+        var f=aend.filter(function(p){return p[1].stand==="fehlt";}).length,u=aend.filter(function(p){return p[1].stand==="umbenannt";}).length;
+        var t=[];if(f)t.push(f+" Auftragsordner "+(f>1?"fehlen":"fehlt")+" in der Ablage");if(u)t.push(u+" umbenannte"+(u>1?"":"r")+" Ordner \u00fcbernommen");
+        if(t.length){setToast(t.join(" \u00b7 "));setTimeout(function(){setToast(null);},4000);}
+      }).catch(function(){}).then(function(){lauf=false;});
+    }
+    var z=setTimeout(pruef,1500);window.addEventListener("focus",pruef);
+    return function(){tot=true;clearTimeout(z);window.removeEventListener("focus",pruef);};
+  },[]);
   function setReleases(upd){
     if(typeof upd!=="function"){setReleasesRaw(vlStrip(upd));return;}
     setReleasesRaw(function(prevRaw){
@@ -14480,9 +14528,9 @@ function Planungstool(){
       if(!w)return WBAblage.wurzelWaehlen();
       return w;
     }).then(function(){return WBAblage.anlegen(iid,titel,sb);}).then(function(o){
-      vlAendern(function(n){var aa=vlAnlegen(n,iid);aa.ordner=Object.assign({},aa.ordner,{name:o.name,link:o.link||aa.ordner.link||"",angelegt:o.angelegt});});
+      vlAendern(function(n){var aa=vlAnlegen(n,iid);var alt=aa.ordner.name;aa.ordner=Object.assign({},aa.ordner,{name:o.name,link:(aa.ordner.link&&!(alt&&aa.ordner.link===WBAblage.linkFuer(alt)))?aa.ordner.link:(o.link||aa.ordner.link||""),angelegt:o.angelegt});delete aa.ordner.fehlt;});
       var akt=WBAblage.aktiv();if(akt&&akt.id===iid){var na=vlAuftrag(vlRef.current.vl,iid);WBAblage.aktivSetzen(Object.assign({},akt,{ordner:na&&na.ordner}),"kapazitaetenplaner");}
-      melde("Ordner "+o.name+" bereit");
+      melde(o.vorhanden?"Vorhandener Ordner "+o.name+" \u00fcbernommen":"Ordner "+o.name+" bereit");
     }).catch(function(e){if(e&&e.name==="AbortError")return;melde(String((e&&e.message)||e));});
   }
   function vlPanel(iss){
@@ -14608,7 +14656,8 @@ function Planungstool(){
         // v3.2.0: Auftragsordner anlegen (Stufe 2) bzw. Steckbrief erneuern
         React.createElement("button",{type:"button","data-vl-anlegen":iid,style:knopf,
           title:(a&&a.ordner&&a.ordner.name)?"auftrag.json in 00_Auftrag neu schreiben, fehlende Unterordner anlegen":(WBAblage.kann?"Ordner "+WBAblage.ordnerName(iid,x.t||iid)+" mit Unterordnern in der Ablage anlegen":"Dieser Browser legt keine Ordner an \u2014 ZIP mit dem Ger\u00fcst laden"),
-          onClick:function(){vlOrdnerAnlegen(iid,x);}},(a&&a.ordner&&a.ordner.name)?"Steckbrief aktualisieren":(WBAblage.kann?"Ordner anlegen":"Ordner als ZIP"))),
+          onClick:function(){vlOrdnerAnlegen(iid,x);}},(a&&a.ordner&&a.ordner.fehlt)?"Ordner neu anlegen":(a&&a.ordner&&a.ordner.name)?"Steckbrief aktualisieren":(WBAblage.kann?"Ordner anlegen":"Ordner als ZIP")),
+        (a&&a.ordner&&a.ordner.fehlt)?React.createElement("span",{"data-vl-fehlt":iid,style:{color:"var(--bad,#E8697D)",fontWeight:700},title:"\u201e"+a.ordner.name+"\u201c ist in der Ablage nicht mehr vorhanden"},"\u26a0 Ordner fehlt"):null),
       React.createElement("button",{type:"button","data-vl-aktiv":iid,style:Object.assign({},knopf,vlAktivId===iid?{borderColor:A.mint,color:A.mint}:{}),
         title:"Alle Werkzeuge arbeiten f\u00fcr diesen Auftrag (Anzeige, Ablage in den Auftragsordner)",
         onClick:function(){var akt=vlAktivId===iid;WBAblage.aktivSetzen(akt?null:{id:iid,titel:x.t||iid,bc:x.bc||"",ordner:(a&&a.ordner)||null},"kapazitaetenplaner");setVlAktivId(akt?"":iid);}},
