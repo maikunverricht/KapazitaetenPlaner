@@ -2551,7 +2551,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.4.3";
+var APP_VERSION="3.5.0";
+// v3.5.0: Rolle Review je Prozessschritt (zweite Ablage im kleinen V, Review-Workitems aus ClearQuest am Titel erkannt); Lesekopie mit entwickler/reviewer je Schritt.
 // v3.4.3: Auftragsordner – vorhandenen Ordner zur Issue-ID weiterverwenden; beim Oeffnen/Fokus pruefen, ob die Ordner noch da sind (fehlt/umbenannt).
 // v3.4.2: Flow aufgeklappt -- vollstaendige Workitem-Liste (auch closed, Ausgeblendete, ohne Release), keine doppelten Zeilen mehr.
 // v3.4.1: Lesekopie traegt Plandaten der FCs (fcPlan) fuer die Issue-Kacheln im Kontor.
@@ -4677,7 +4678,10 @@ var VL_SCHRITTE=[
   {k:"ABS",  n:"Abschluss",        w:"KapazitätenPlaner"}
 ];
 // Lage im kleinen V: links in %, oben in px (Kasten 12,5 % breit, 62 px hoch)
-var VL_LAGE={"EIN":[0,0],"SWE.1":[13.5,0],"SWE.2":[21.75,64],"SWE.3":[30,128],"SWE.4":[57.5,128],"SWE.5":[65.75,64],"SWE.6":[74,0],"ABS":[87.5,0]};
+var VL_LAGE={"EIN":[0,0],"SWE.1":[13.5,0],"SWE.2":[21.75,88],"SWE.3":[30,176],"SWE.4":[57.5,176],"SWE.5":[65.75,88],"SWE.6":[74,0],"ABS":[87.5,0]};
+// v3.5.0: Anteil der Review-Workitems am Schrittaufwand (Rest: Entwicklung)
+var VL_REVIEW_ANTEIL=20;
+function vlIstReview(w){return !!(w&&(w.rolle==="review"||(w.cq&&/review/i.test(String(w.titel||"")))));}
 var VL_ANTEILE={"EIN":0,"SWE.1":15,"SWE.2":10,"SWE.3":30,"SWE.4":10,"SWE.5":10,"SWE.6":25,"ABS":0};
 var VL_STATUS=[["new","offen"],["started","in Arbeit"],["blocked","blockiert"],["closed","erledigt"]];
 var VL_AUFWAND_STD=40; // h, wenn das Issue keinen Aufwand mitbringt
@@ -4713,6 +4717,7 @@ function vlWid(vl,iid,k,name){
   while(belegt[id])id=b+"-"+(n++);
   return id;
 }
+function vlHaupt(ws){var b=null;(ws||[]).forEach(function(w){if(w.ma&&(!b||(Number(w.h)||0)>(Number(b.h)||0)))b=w;});return b?b.ma:"";}
 function vlSchrittStatus(ws){
   if(!ws.length)return "";
   if(ws.every(function(w){return w.lcs==="closed";}))return "closed";
@@ -4847,7 +4852,9 @@ function vlLesekopie(vl,idx,rels,emps,angemeldet){
           start:ws.reduce(function(m,w){return w.start&&(!m||w.start<m)?w.start:m;},""),
           ende:ws.reduce(function(m,w){return w.end&&w.end>m?w.end:m;},""),
           rest:ws.reduce(function(m,w){return m+(w.lcs==="closed"?0:(Number(w.rest)||0));},0),
-          workitems:ws.map(function(w){return w.id;})};
+          workitems:ws.map(function(w){return w.id;}),
+          // v3.5.0: im Kontor aussen der Entwickler, innen der Reviewer (je der mit dem meisten Aufwand)
+          entwickler:vlHaupt(ws.filter(function(w){return !vlIstReview(w);})),reviewer:vlHaupt(ws.filter(vlIstReview))};
       });
       // ClearQuest-Workitems des Issues (ohne die eigenen V-Workitems)
       var cq=(x.wis||[]).filter(function(id){return !(a.wis&&a.wis[id]);}).map(function(id){return pk[id];}).filter(Boolean);
@@ -14413,13 +14420,20 @@ function Planungstool(){
       var p=P[id];return p?Object.assign(vlCqAlsWi(p,nb),{k:z[id]}):null;}).filter(Boolean);
   }
   function vlVerteilen(n,a,k){
-    var ws=vlWisVon(a,k).filter(function(w){return w.lcs!=="closed"&&!w.hFix;});
-    if(!ws.length)return;
+    var alle=vlWisVon(a,k),cqs=vlCqVon(a,k);
     var soll=(Number(a.aufwand)||0)*(Number(n.anteile[k])||0)/100;
-    var fest=vlWisVon(a,k).filter(function(w){return w.lcs==="closed"||w.hFix;}).reduce(function(s,w){return s+(Number(w.h)||0);},0)
-      +vlCqVon(a,k).reduce(function(s,w){return s+w.h;},0); // ClearQuest-Aufwand zaehlt vorab
-    var h=Math.max(1,Math.round(Math.max(0,soll-fest)/ws.length*2)/2);
-    ws.forEach(function(w){var weg=Math.max(0,(Number(w.h)||0)-(w.rest!=null?Number(w.rest):Number(w.h)||0));w.h=h;w.rest=Math.max(0,h-weg);});
+    // v3.5.0: Review bekommt VL_REVIEW_ANTEIL % des Schritts, Entwicklung den Rest -- sofern beide Rollen besetzt sind
+    var mitRev=alle.some(vlIstReview)||cqs.some(vlIstReview),mitEnt=alle.some(function(w){return !vlIstReview(w);})||cqs.some(function(w){return !vlIstReview(w);});
+    [false,true].forEach(function(rev){
+      var teil=mitRev&&mitEnt?soll*(rev?VL_REVIEW_ANTEIL:100-VL_REVIEW_ANTEIL)/100:soll;
+      var gl=function(w){return vlIstReview(w)===rev;};
+      var ws=alle.filter(function(w){return gl(w)&&w.lcs!=="closed"&&!w.hFix;});
+      if(!ws.length)return;
+      var fest=alle.filter(function(w){return gl(w)&&(w.lcs==="closed"||w.hFix);}).reduce(function(s,w){return s+(Number(w.h)||0);},0)
+        +cqs.filter(gl).reduce(function(s,w){return s+w.h;},0); // ClearQuest-Aufwand zaehlt vorab
+      var h=Math.max(1,Math.round(Math.max(0,teil-fest)/ws.length*2)/2);
+      ws.forEach(function(w){var weg=Math.max(0,(Number(w.h)||0)-(w.rest!=null?Number(w.rest):Number(w.h)||0));w.h=h;w.rest=Math.max(0,h-weg);});
+    });
   }
   // Grobplanung: Vorgaenger = alle Workitems des vorigen belegten Schritts,
   // Termine aus der Prognose (runAnalysis bucht freie Stunden je Mitarbeiter,
@@ -14429,7 +14443,9 @@ function Planungstool(){
     var prev=[];
     VL_SCHRITTE.forEach(function(s){
       var ws=vlWisVon(a,s.k),cq=vlCqVon(a,s.k);if(!ws.length&&!cq.length)return;
-      ws.forEach(function(w){w.deps=prev.slice();});
+      // v3.5.0: Review folgt der Entwicklung im selben Schritt; der naechste Schritt wartet auf beide
+      var ent=ws.filter(function(w){return !vlIstReview(w);}).map(function(w){return w.id;}).concat(cq.filter(function(w){return !vlIstReview(w);}).map(function(w){return w.id;}));
+      ws.forEach(function(w){w.deps=vlIstReview(w)&&ent.length?ent.slice():prev.slice();});
       prev=ws.map(function(w){return w.id;}).concat(cq.map(function(w){return w.id;}));
     });
     var heute=dateStr(new Date());
@@ -14444,17 +14460,21 @@ function Planungstool(){
       w.start=x.planStart||heute;w.end=x.capEnd||w.start;
     });
   }
-  function vlZuordnen(iid,k,ma,von){
+  // v3.5.0: rolle "review" = zweite Ablage im Schritt; vonRolle = woher der Avatar gezogen wurde
+  function vlZuordnen(iid,k,ma,von,rolle,vonRolle){
     if(!ma)return;
+    var rev=rolle==="review",vrev=vonRolle==="review";
     vlAendern(function(n){
       var a=vlAnlegen(n,iid),titel=(issueIdxRaw&&issueIdxRaw[iid]&&issueIdxRaw[iid].t)||iid;
-      if(von&&von!==k){
-        vlWisVon(a,von).forEach(function(w){if(w.ma===ma&&w.lcs!=="closed")delete a.wis[w.id];});
+      if(von&&(von!==k||vrev!==rev)){
+        vlWisVon(a,von).forEach(function(w){if(w.ma===ma&&w.lcs!=="closed"&&vlIstReview(w)===vrev)delete a.wis[w.id];});
         vlVerteilen(n,a,von);
       }
-      if(k&&!vlWisVon(a,k).some(function(w){return w.ma===ma;})&&!vlCqVon(a,k).some(function(w){return w.ma===ma;})){
-        var s=VL_SCHRITTE.find(function(x){return x.k===k;}),id=vlWid(n,iid,k,ma);
-        a.wis[id]={id:id,iid:iid,k:k,ma:ma,titel:k+" "+s.n+" · "+titel,h:0,rest:0,start:"",end:"",deps:[],lcs:"new"};
+      var gleich=function(w){return w.ma===ma&&vlIstReview(w)===rev;};
+      if(k&&!vlWisVon(a,k).some(gleich)&&!vlCqVon(a,k).some(gleich)){
+        var s=VL_SCHRITTE.find(function(x){return x.k===k;}),id=vlWid(n,iid,k+(rev?"R":""),ma);
+        a.wis[id]={id:id,iid:iid,k:k,ma:ma,titel:(rev?"Review ":"")+k+" "+s.n+" · "+titel,h:0,rest:0,start:"",end:"",deps:[],lcs:"new"};
+        if(rev)a.wis[id].rolle="review";
       }
       if(k)vlVerteilen(n,a,k);
       vlPlanenIn(n,iid,false);
@@ -14548,43 +14568,58 @@ function Planungstool(){
     function aufStep(k){
       return {
         onDragOver:function(e){if(darf){e.preventDefault();e.dataTransfer.dropEffect="move";}},
-        onDrop:function(e){e.preventDefault();var d=vlDragDaten(e);if(d&&d.iid===iid)vlZuordnen(iid,k,d.ma,d.von||"");},
-        onClick:function(){if(wahl)vlZuordnen(iid,k,wahl.ma,wahl.von||"");}
+        onDrop:function(e){e.preventDefault();var d=vlDragDaten(e);if(d&&d.iid===iid)vlZuordnen(iid,k,d.ma,d.von||"","",d.vr||"");},
+        onClick:function(){if(wahl)vlZuordnen(iid,k,wahl.ma,wahl.von||"","",wahl.vr||"");}
       };
     }
-    function ziehbar(ma,von){
+    // v3.5.0: Ablage "Review" im Schritt
+    function aufReview(k){
+      return {"data-vl-review":k,
+        onDragOver:function(e){if(darf){e.preventDefault();e.stopPropagation();e.dataTransfer.dropEffect="move";}},
+        onDrop:function(e){e.preventDefault();e.stopPropagation();var d=vlDragDaten(e);if(d&&d.iid===iid)vlZuordnen(iid,k,d.ma,d.von||"","review",d.vr||"");},
+        onClick:function(e){e.stopPropagation();if(wahl)vlZuordnen(iid,k,wahl.ma,wahl.von||"","review",wahl.vr||"");}
+      };
+    }
+    function ziehbar(ma,von,vr){
       if(!darf)return {};
       return {draggable:true,
-        onDragStart:function(e){e.stopPropagation();e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain","vl:"+JSON.stringify({iid:iid,ma:ma,von:von||""}));},
-        onClick:function(e){e.stopPropagation();setVlWahl(wahl&&wahl.ma===ma&&(wahl.von||"")===(von||"")?null:{iid:iid,ma:ma,von:von||""});}};
+        onDragStart:function(e){e.stopPropagation();e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain","vl:"+JSON.stringify({iid:iid,ma:ma,von:von||"",vr:vr||""}));},
+        onClick:function(e){e.stopPropagation();setVlWahl(wahl&&wahl.ma===ma&&(wahl.von||"")===(von||"")&&(wahl.vr||"")===(vr||"")?null:{iid:iid,ma:ma,von:von||"",vr:vr||""});}};
     }
     // ── kleines V ──
-    var mitte=function(k){var l=VL_LAGE[k];return [l[0]+6.25,l[1]+31];};
+    var mitte=function(k){var l=VL_LAGE[k];return [l[0]+6.25,l[1]+42];};
     var linie=VL_SCHRITTE.map(function(s){var m=mitte(s.k);return m[0]+","+m[1];}).join(" ");
-    var vFeld=React.createElement("div",{"data-vl-v":iid,style:{position:"relative",height:194,minWidth:760}},
-      React.createElement("svg",{viewBox:"0 0 100 194",preserveAspectRatio:"none",style:{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}},
+    var vFeld=React.createElement("div",{"data-vl-v":iid,style:{position:"relative",height:262,minWidth:760}},
+      React.createElement("svg",{viewBox:"0 0 100 262",preserveAspectRatio:"none",style:{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}},
         React.createElement("polyline",{points:linie,fill:"none",stroke:A.borderMid,strokeWidth:1.5,vectorEffect:"non-scaling-stroke",strokeDasharray:"4 3"})),
       VL_SCHRITTE.map(function(s){
         var l=VL_LAGE[s.k],ws=wis.filter(function(w){return w.k===s.k;}),cs=cqZu.filter(function(w){return w.k===s.k;}),st=vlSchrittStatus(ws.concat(cs));
         var ziel=!!wahl&&darf;
         return React.createElement("div",Object.assign({key:s.k,"data-vl-step":s.k,
           title:s.k+" · "+s.n+" ("+s.w+")"+(st?"\nStatus: "+statusText[st]:"")+(darf?"\nMitarbeiter hierher ziehen":""),
-          style:{position:"absolute",left:l[0]+"%",top:l[1],width:"12.5%",height:62,boxSizing:"border-box",
+          style:{position:"absolute",left:l[0]+"%",top:l[1],width:"12.5%",height:84,boxSizing:"border-box",
             background:A.surface,border:(ziel?"1.5px dashed "+A.mint:"1px solid "+A.border),borderTop:"3px solid "+statusFarbe[st],
             borderRadius:"var(--r-md)",padding:"3px 5px",display:"flex",flexDirection:"column",gap:2,cursor:ziel?"copy":"default",overflow:"hidden"}},aufStep(s.k)),
           React.createElement("div",{style:{display:"flex",justifyContent:"space-between",gap:4,alignItems:"baseline"}},
             React.createElement("b",{style:{fontSize:"var(--fs-2xs)",color:A.text,whiteSpace:"nowrap"}},s.k==="EIN"||s.k==="ABS"?s.n:s.k),
             React.createElement("span",{style:Object.assign({},klein,{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"})},s.k==="EIN"||s.k==="ABS"?"":s.n)),
-          React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:3,minHeight:20}},
-            (ws.length||cs.length)?ws.map(function(w){
-              return vlAvatar(w.ma,20,{key:w.id,blass:w.lcs==="closed",an:wahl&&wahl.ma===w.ma&&wahl.von===s.k,drag:darf&&w.lcs!=="closed",
-                title:vlName(w.ma)+" · "+(w.h||0)+" h · "+(statusText[w.lcs]||w.lcs)+(w.start?"\n"+w.start+" → "+w.end:""),
-                attr:w.lcs==="closed"?{}:ziehbar(w.ma,s.k)});
-            }).concat(cs.map(function(w){
-              return React.createElement("span",{key:"cq-"+w.id,"data-vl-cq-chip":w.id,style:{position:"relative",display:"inline-flex"}},
+          (function(){
+          // v3.5.0: Zeile 1 Entwicklung, Zeile 2 Review
+          var avW=function(w,vr){return vlAvatar(w.ma,20,{key:w.id,blass:w.lcs==="closed",an:wahl&&wahl.ma===w.ma&&wahl.von===s.k&&(wahl.vr||"")===vr,drag:darf&&w.lcs!=="closed",
+                title:(vr?"Review: ":"")+vlName(w.ma)+" · "+(w.h||0)+" h · "+(statusText[w.lcs]||w.lcs)+(w.start?"\n"+w.start+" → "+w.end:""),
+                attr:w.lcs==="closed"?{}:ziehbar(w.ma,s.k,vr)});};
+          var avC=function(w){return React.createElement("span",{key:"cq-"+w.id,"data-vl-cq-chip":w.id,style:{position:"relative",display:"inline-flex"}},
                 vlAvatar(w.ma||"?",20,{blass:w.lcs==="closed",title:"ClearQuest "+w.id+" \u00b7 "+w.titel+"\n"+vlName(w.ma)+" \u00b7 "+(statusText[w.lcs]||w.lcs)+(w.start?"\n"+w.start+" \u2192 "+w.end:"")}),
-                React.createElement("i",{style:{position:"absolute",right:-3,bottom:-3,fontStyle:"normal",fontSize:7,fontWeight:800,background:A.text,color:A.surface,borderRadius:3,padding:"0 2px",lineHeight:"9px"}},"CQ"));
-            })):React.createElement("span",{style:klein},"—")),
+                React.createElement("i",{style:{position:"absolute",right:-3,bottom:-3,fontStyle:"normal",fontSize:7,fontWeight:800,background:A.text,color:A.surface,borderRadius:3,padding:"0 2px",lineHeight:"9px"}},"CQ"));};
+          var wE=ws.filter(function(w){return !vlIstReview(w);}),wR=ws.filter(vlIstReview),cE=cs.filter(function(w){return !vlIstReview(w);}),cR=cs.filter(vlIstReview);
+          if(s.k==="EIN"||s.k==="ABS")wE=ws,wR=[],cE=cs,cR=[];
+          return [React.createElement("div",{key:"e",style:{display:"flex",flexWrap:"wrap",gap:3,minHeight:20}},
+              (wE.length||cE.length)?wE.map(function(w){return avW(w,"");}).concat(cE.map(avC)):React.createElement("span",{style:klein},"—")),
+            s.k==="EIN"||s.k==="ABS"?null:React.createElement("div",Object.assign({key:"r",title:"Review"+(darf?" \u2013 Mitarbeiter hierher ziehen":""),
+              style:{display:"flex",flexWrap:"wrap",alignItems:"center",gap:3,minHeight:20,borderTop:"1px dashed "+A.border,paddingTop:2,cursor:ziel?"copy":"default"}},aufReview(s.k)),
+              React.createElement("span",{style:Object.assign({},klein,{fontWeight:700,letterSpacing:".04em"})},"REV"),
+              wR.map(function(w){return avW(w,"review");}).concat(cR.map(avC)))];
+          })(),
           erg[s.k]?React.createElement("span",{"data-vl-erg":s.k,title:erg[s.k]+" \u2014 R\u00fcckmeldung aus "+s.w,style:Object.assign({},klein,{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",color:A.textMid})},erg[s.k]):null)
       }));
     // ── Mitarbeiter-Leiste ──
@@ -14596,8 +14631,8 @@ function Planungstool(){
         })),
       React.createElement("div",{"data-vl-weg":iid,
         onDragOver:function(e){e.preventDefault();},
-        onDrop:function(e){e.preventDefault();var d=vlDragDaten(e);if(d&&d.iid===iid&&d.von)vlZuordnen(iid,null,d.ma,d.von);},
-        onClick:function(){if(wahl&&wahl.von)vlZuordnen(iid,null,wahl.ma,wahl.von);},
+        onDrop:function(e){e.preventDefault();var d=vlDragDaten(e);if(d&&d.iid===iid&&d.von)vlZuordnen(iid,null,d.ma,d.von,"",d.vr||"");},
+        onClick:function(){if(wahl&&wahl.von)vlZuordnen(iid,null,wahl.ma,wahl.von,"",wahl.vr||"");},
         style:{marginLeft:"auto",border:"1px dashed "+(wahl&&wahl.von?A.coral:A.border),borderRadius:"var(--r-md)",padding:"4px 10px",
           fontSize:"var(--fs-2xs)",color:wahl&&wahl.von?A.coral:A.textLight,cursor:wahl&&wahl.von?"pointer":"default"}},"✕ hierher = entfernen"),
       React.createElement("span",{style:klein},wahl?(wahl.von?"Ziel-Schritt antippen oder entfernen":"Schritt antippen"):"Ziehen oder antippen"))
