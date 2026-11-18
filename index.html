@@ -2551,7 +2551,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.5.1";
+var APP_VERSION="3.6.0";
+// v3.6.0: Sprints -- Team-Sprints mit festen Zeiten, Workitems nach Dringlichkeit in Sprints einplanen (auch ueber mehrere Sprints); Workitems im Sprintzeitraum ausserhalb des Sprints melden sich in der Umplanung. Lesekopie wb-kapazitaetenplaner-sprint fuer das Kontor-Widget.
 // v3.5.1: Review-Anteil im Schritt einstellbar (vlauf.review, Standard 20 %).
 // v3.5.0: Rolle Review je Prozessschritt (zweite Ablage im kleinen V, Review-Workitems aus ClearQuest am Titel erkannt); Lesekopie mit entwickler/reviewer je Schritt.
 // v3.4.3: Auftragsordner – vorhandenen Ordner zur Issue-ID weiterverwenden; beim Oeffnen/Fokus pruefen, ob die Ordner noch da sind (fehlt/umbenannt).
@@ -4720,6 +4721,47 @@ function vlWid(vl,iid,k,name){
   while(belegt[id])id=b+"-"+(n++);
   return id;
 }
+/* ── v3.6.0: Sprints (Team) ──
+   ptool_sprints = {start:"JJJJ-MM-TT", wochen:2, ende:{nr:"JJJJ-MM-TT"}, zu:{pkgId:{nr:h}}}
+   Sprint n beginnt am Tag nach dem Ende von n-1; "ende" verschiebt nur diesen Sprint. */
+var SPR_KEY="ptool_sprints";
+function sprLeer(){return {start:"",wochen:2,ende:{},zu:{}};}
+function sprLaden(){var v=null;try{v=JSON.parse(localStorage.getItem(SPR_KEY)||"null");}catch(e){}
+  if(!v||typeof v!=="object"||Array.isArray(v))return sprLeer();
+  return {start:typeof v.start==="string"?v.start:"",wochen:Math.max(1,Math.min(6,Number(v.wochen)||2)),
+    ende:v.ende&&typeof v.ende==="object"?v.ende:{},zu:v.zu&&typeof v.zu==="object"?v.zu:{}};}
+function sprTag(iso,n){var d=new Date(iso+"T00:00:00");d.setDate(d.getDate()+n);return dateStr(d);}
+function sprListe(cfg,bis){
+  var out=[];if(!cfg||!/^\d{4}-\d{2}-\d{2}$/.test(cfg.start||""))return out;
+  var s=cfg.start,len=(Number(cfg.wochen)||2)*7;
+  for(var i=1;i<=520;i++){var e=(cfg.ende&&cfg.ende[i])||sprTag(s,len-1);if(e<s)e=s;out.push({nr:i,start:s,ende:e});if(s>bis)break;s=sprTag(e,1);}
+  return out;}
+function sprKap(emp,absMap,von,bis){var am=(absMap&&absMap[emp.id])||{},h=0,d=new Date(von+"T00:00:00"),e=bis;
+  while(dateStr(d)<=e){var iso=dateStr(d);if(!isWE(d)&&!am[iso])h+=dailyCapacity(emp);d.setDate(d.getDate()+1);}return h;}
+function sprRest(p){return p.remainingHours!=null?Number(p.remainingHours)||0:Number(p.hours)||0;}
+/* Dringlichkeit: ueberfaellig > naechster Liefertermin (FC/BC) > in Arbeit > Plandatum */
+function sprDringlich(a,b,heute){
+  var ua=a.end&&a.end<heute?0:1,ub=b.end&&b.end<heute?0:1;if(ua!==ub)return ua-ub;
+  var la=a.fcDueDate||a.bcDueDate||"9999",lb=b.fcDueDate||b.bcDueDate||"9999";if(la!==lb)return la<lb?-1:1;
+  var sa=a.lcs==="started"?0:1,sb=b.lcs==="started"?0:1;if(sa!==sb)return sa-sb;
+  return String(a.end||"9999").localeCompare(String(b.end||"9999"));}
+/* Meldungen: im Zeitraum eines verplanten Sprints geplant, aber nicht im Sprint -- oder im Sprint, endet aber danach */
+function sprMeldungen(cfg,pkgs,analysis,heute){
+  var L=sprListe(cfg,heute),zu=cfg.zu||{},geplant={};
+  Object.keys(zu).forEach(function(id){Object.keys(zu[id]||{}).forEach(function(nr){geplant[nr]=true;});});
+  var S=L.filter(function(x){return geplant[x.nr]&&x.ende>=heute;});if(!S.length)return [];
+  var plan={};(analysis||[]).forEach(function(r){if(r&&r.pkg)plan[r.pkg.id]={s:r.planStart||r.pkg.start,e:r.capEnd||r.pkg.end};});
+  var out=[];
+  (pkgs||[]).forEach(function(p){if(!p||p.lcs==="closed")return;
+    var w=plan[p.id]||{s:p.start,e:p.end},z=zu[p.id]||{};if(!w.s&&!w.e)return;
+    var s0=w.s||w.e,e0=w.e||w.s;
+    S.forEach(function(x){
+      var drin=z[x.nr]!=null,ueberl=s0<=x.ende&&e0>=x.start;
+      if(!drin&&ueberl)out.push({p:p,sprint:x,grund:"im Zeitraum von Sprint "+x.nr+" geplant, aber nicht eingeplant",start:s0,ende:e0});
+      if(drin&&e0>x.ende&&!Object.keys(z).some(function(n){return Number(n)>x.nr;}))out.push({p:p,sprint:x,grund:"in Sprint "+x.nr+", geplant bis "+e0+" \u2013 nach Sprintende",start:s0,ende:e0});
+    });
+  });
+  return out;}
 function vlHaupt(ws){var b=null;(ws||[]).forEach(function(w){if(w.ma&&(!b||(Number(w.h)||0)>(Number(b.h)||0)))b=w;});return b?b.ma:"";}
 function vlSchrittStatus(ws){
   if(!ws.length)return "";
@@ -6807,6 +6849,10 @@ function Planungstool(){
   var s_vlWahl=useState(null);var vlWahl=s_vlWahl[0],setVlWahl=s_vlWahl[1];
   // v3.4.0: im Flow ausgeblendete Auftraege (faelschlich in der Liste). Sie fehlen
   // auch in der Lesekopie fuer Kontor und Anforderungsbuch.
+  // v3.6.0: Sprints
+  var s_spr=useState(sprLaden);var sprCfg=s_spr[0],setSprCfg=s_spr[1];
+  useEffect(function(){try{localStorage.setItem(SPR_KEY,JSON.stringify(sprCfg));}catch(e){}},[sprCfg]);
+  var s_sprWahl=useState(null);var sprWahl=s_sprWahl[0],setSprWahl=s_sprWahl[1];
   var s_flowAus=useState(function(){var v=lsLoad("ptool_flow_aus",{});return v&&typeof v==="object"&&!Array.isArray(v)?v:{};});
   var flowAus=s_flowAus[0],setFlowAus=s_flowAus[1];
   var s_flowZeigeAus=useState(false);var flowZeigeAus=s_flowZeigeAus[0],setFlowZeigeAus=s_flowZeigeAus[1];
@@ -8124,7 +8170,26 @@ function Planungstool(){
     setImpOpen(false);setBriefOpen(false);
     setEditPkg(impFind(id));setModal("editPkg");
   }
-  var replanCount=analysis.filter(function(r){return r.status==="replan";}).length;
+  var sprMeld=useMemo(function(){return sprMeldungen(sprCfg,allPkgs,analysis,dateStr(new Date()));},[sprCfg,allPkgs,analysis]);
+  var replanCount=analysis.filter(function(r){return r.status==="replan";}).length+sprMeld.length;
+  // v3.6.0: Lesekopie fuer das Sprint-Widget im Kontor
+  useEffect(function(){
+    try{
+      var heute=dateStr(new Date()),L=sprListe(sprCfg,sprTag(heute,60));
+      var akt=L.find(function(x){return x.start<=heute&&heute<=x.ende;})||L.find(function(x){return x.start>heute;});
+      if(!akt){localStorage.removeItem("wb-kapazitaetenplaner-sprint");return;}
+      var ids=Object.keys(sprCfg.zu||{}).filter(function(id){return sprCfg.zu[id]&&sprCfg.zu[id][akt.nr]!=null;});
+      var offen=ids.filter(function(id){return !!pkgById[id];});
+      var geplant=ids.reduce(function(s,id){return s+(Number(sprCfg.zu[id][akt.nr])||0);},0);
+      var emps=employees.filter(function(e){return !hiddenEmp[e.name];});
+      var kap=emps.reduce(function(s,e){return s+sprKap(e,absenceMap,akt.start,akt.ende);},0);
+      var ueber=emps.filter(function(e){var h=offen.filter(function(id){return pkgById[id].employee===e.id;}).reduce(function(s,id){return s+(Number(sprCfg.zu[id][akt.nr])||0);},0);
+        return h>sprKap(e,absenceMap,akt.start,akt.ende);}).length;
+      localStorage.setItem("wb-kapazitaetenplaner-sprint",JSON.stringify({quelle:"kapazitaetenplaner",version:APP_VERSION,updated:new Date().toISOString(),heute:heute,
+        sprint:akt,laeuft:akt.start<=heute,n:ids.length,offen:offen.length,erledigt:ids.length-offen.length,geplant:Math.round(geplant*10)/10,kap:Math.round(kap*10)/10,
+        ueber:ueber,melden:sprMeld.filter(function(m){return m.sprint.nr===akt.nr;}).length}));
+    }catch(e){}
+  },[sprCfg,sprMeld,pkgById,employees,hiddenEmp,absenceMap]);
   var pufferCount=analysis.filter(function(r){return r.status==="puffer";}).length;
   var gainCount=analysis.filter(function(r){return r.endShifted;}).length;
   var indirectCount=analysis.filter(function(r){return r.indirectlyAffected&&r.indirectlyAffected.length>0;}).length;
@@ -9774,6 +9839,118 @@ function Planungstool(){
   // oder ins PDF gehen.
   // ══════════════════════════════════════════════════════════════════
   // v3.3.0: Forecast -- offener Aufwand gegen Kapazitaet im Horizont (aus der Auswertung umgezogen)
+  // ── v3.6.0: Sprints planen ──
+  function sprBanner(){
+    if(!sprMeld.length)return null;
+    var kl={fontSize:"var(--fs-xs)",color:A.textMid};
+    return React.createElement("div",{"data-spr-banner":"1",style:{margin:"12px 20px 0",padding:"10px 14px",borderRadius:"var(--r-lg)",border:"1.5px solid "+A.amber,background:A.surface,maxWidth:1060}},
+      React.createElement("div",{style:{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:6}},
+        React.createElement("b",{style:{color:A.text}},"\uD83C\uDFC3 "+sprMeld.length+" Workitem"+(sprMeld.length>1?"s":"")+" passen nicht zum Sprint"),
+        React.createElement("span",{style:kl},"im Sprintzeitraum geplant, aber nicht eingeplant \u2013 oder im Sprint, aber erst danach fertig"),
+        React.createElement("button",{type:"button",onClick:function(){setView("sprints");},style:{marginLeft:"auto",padding:"4px 12px",borderRadius:"var(--r-md)",border:"1px solid "+A.border,background:A.bg,color:A.text,cursor:"pointer",fontWeight:700,fontSize:"var(--fs-xs)"}},"Sprints planen")),
+      sprMeld.slice(0,8).map(function(m,i){var e=employees.find(function(x){return x.id===m.p.employee;});
+        return React.createElement("div",{key:i,style:Object.assign({},kl,{display:"flex",gap:8,padding:"2px 0"})},
+          React.createElement("code",null,m.p.id),React.createElement("span",{style:{color:A.text}},m.p.title||""),React.createElement("span",null,e?e.name:""),React.createElement("span",{style:{marginLeft:"auto",color:A.amber}},m.grund));}),
+      sprMeld.length>8?React.createElement("div",{style:kl},"+ "+(sprMeld.length-8)+" weitere"):null);
+  }
+  function SprintsView(){
+    var heute=dateStr(new Date());
+    var cfg=sprCfg,L=sprListe(cfg,sprTag(heute,400));
+    var aktI=L.findIndex(function(x){return x.ende>=heute;});if(aktI<0)aktI=Math.max(0,L.length-1);
+    var s_zeig=useState(4);var zeig=s_zeig[0],setZeig=s_zeig[1];
+    var s_vor=useState(0);var vor=s_vor[0],setVor=s_vor[1];
+    var sichtbar=L.slice(Math.max(0,aktI-vor),aktI+zeig);
+    var kl={fontSize:"var(--fs-2xs)",color:A.textLight};
+    var ein={background:A.surface,border:"1px solid "+A.border,borderRadius:"var(--r-sm)",padding:"3px 6px",fontSize:"var(--fs-xs)",color:A.text};
+    var knopf={padding:"4px 10px",borderRadius:"var(--r-md)",border:"1px solid "+A.border,background:A.bg,color:A.text,cursor:"pointer",fontSize:"var(--fs-xs)",fontWeight:600};
+    var nh=function(v){return (Math.round(v*10)/10).toLocaleString("de-DE");};
+    var tg=function(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7)+".":"";};
+    var empName=function(id){var e=employees.find(function(x){return x.id===id;});return e?e.name:"";};
+    function aendern(fn){setSprCfg(function(c){var n=JSON.parse(JSON.stringify(c));fn(n);return n;});}
+    var zu=cfg.zu||{};
+    var verplant=function(id,ohne){var z=zu[id]||{};return Object.keys(z).reduce(function(s,nr){return s+(String(nr)===String(ohne)?0:Number(z[nr])||0);},0);};
+    function einplanen(id,nr){var p=pkgById[id];if(!p)return;
+      aendern(function(n){if(!n.zu[id])n.zu[id]={};if(n.zu[id][nr]!=null)return;
+        var r=Math.max(0,sprRest(p)-verplant(id,nr));n.zu[id][nr]=Math.round((r>0?r:sprRest(p))*2)/2;});
+      setSprWahl(null);}
+    function entfernen(id,nr){aendern(function(n){if(n.zu[id]){delete n.zu[id][nr];if(!Object.keys(n.zu[id]).length)delete n.zu[id];}});}
+    // ── Kopf: Sprintzeiten ──
+    var kopf=React.createElement("div",{style:{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",marginBottom:12}},
+      React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},"Erster Sprint ab",
+        React.createElement("input",{type:"date",value:cfg.start||"","data-spr-start":"1",onChange:function(e){var v=e.target.value;aendern(function(n){n.start=v;});},style:ein})),
+      React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},"L\u00e4nge",
+        React.createElement("select",{value:cfg.wochen,"data-spr-wochen":"1",onChange:function(e){var v=Number(e.target.value);aendern(function(n){n.wochen=v;n.ende={};});},style:ein},
+          [1,2,3,4].map(function(w){return React.createElement("option",{key:w,value:w},w+(w>1?" Wochen":" Woche"));}))),
+      React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},"Anzeigen",
+        React.createElement("select",{value:zeig,onChange:function(e){setZeig(Number(e.target.value));},style:ein},[2,3,4,6,8].map(function(z){return React.createElement("option",{key:z,value:z},z+" Sprints");}))),
+      aktI>0?React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},React.createElement("input",{type:"checkbox",checked:vor>0,onChange:function(e){setVor(e.target.checked?1:0);}}),"vorigen Sprint zeigen"):null,
+      React.createElement("span",{style:kl},"Ein Sprint gilt f\u00fcr das ganze Team. Ende eines Sprints \u00e4nderbar; der n\u00e4chste beginnt am Tag danach."));
+    if(!L.length)return React.createElement("div",{style:{padding:20,maxWidth:1100}},kopf,
+      React.createElement("div",{style:{padding:30,color:A.textMid,border:"1px dashed "+A.border,borderRadius:"var(--r-lg)"}},"Lege oben fest, wann der erste Sprint beginnt und wie lang ein Sprint ist."));
+    // ── Workitems nach Dringlichkeit ──
+    var pkgs=allPkgs.filter(function(p){return p.lcs!=="closed"&&(canSeeAll||(selfEmp&&p.employee===selfEmp.id));}).slice().sort(function(a,b){return sprDringlich(a,b,heute);});
+    var meldIds={};sprMeld.forEach(function(m){meldIds[m.p.id]=m.grund;});
+    var marke=function(p){if(p.end&&p.end<heute)return ["\u00fcberf\u00e4llig",A.coral];var l=p.fcDueDate||p.bcDueDate;if(l)return ["Lieferung "+tg(l),A.amber];if(p.lcs==="started")return ["in Arbeit",A.sky];return ["",A.textLight];};
+    var liste=React.createElement("div",{"data-spr-liste":"1",style:{flex:"1 1 380px",minWidth:300,maxHeight:"70vh",overflow:"auto",border:"1px solid "+A.border,borderRadius:"var(--r-lg)",background:A.surface}},
+      React.createElement("div",{style:{padding:"8px 12px",borderBottom:"1px solid "+A.border,position:"sticky",top:0,background:A.surface,zIndex:1}},
+        React.createElement("b",{style:{fontSize:"var(--fs-sm)",color:A.text}},"Workitems nach Dringlichkeit"),
+        React.createElement("div",{style:kl},"\u00fcberf\u00e4llig \u2192 n\u00e4chster Liefertermin \u2192 in Arbeit \u2192 Plandatum \u00b7 ziehen oder antippen, dann Sprint antippen")),
+      pkgs.map(function(p){
+        var r=sprRest(p),v=verplant(p.id),m=marke(p),gew=sprWahl===p.id,sp=Object.keys(zu[p.id]||{}).sort(function(a,b){return a-b;});
+        return React.createElement("div",{key:p.id,"data-spr-wi":p.id,draggable:true,
+          onDragStart:function(e){e.dataTransfer.effectAllowed="copy";e.dataTransfer.setData("text/plain","spr:"+p.id);},
+          onClick:function(){setSprWahl(gew?null:p.id);},
+          style:{padding:"7px 12px",borderBottom:"1px solid "+A.border,cursor:"grab",background:gew?A.mintLight:"transparent",display:"grid",gridTemplateColumns:"1fr auto",gap:"2px 10px"}},
+          React.createElement("div",{style:{minWidth:0}},
+            React.createElement("div",{style:{display:"flex",gap:6,alignItems:"baseline",flexWrap:"wrap"}},
+              React.createElement("code",{style:{fontSize:"var(--fs-2xs)",color:A.textMid}},p.id),
+              m[0]?React.createElement("span",{style:{fontSize:"var(--fs-2xs)",fontWeight:700,color:m[1]}},m[0]):null,
+              meldIds[p.id]?React.createElement("span",{title:meldIds[p.id],style:{fontSize:"var(--fs-2xs)",color:A.amber}},"\u26a0 umplanen"):null),
+            React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},p.title||p.id),
+            React.createElement("div",{style:kl},empName(p.employee)+(p.cn?" \u00b7 "+p.cn:p.rn?" \u00b7 "+p.rn:"")+(p.end?" \u00b7 Plan bis "+tg(p.end):""))),
+          React.createElement("div",{style:{textAlign:"right"}},
+            React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.text}},nh(r)+" h"),
+            React.createElement("div",{style:Object.assign({},kl,{color:v>=r&&r>0?A.green:v>0?A.amber:A.textLight})},v?(v>=r?"verplant":nh(r-v)+" h offen"):"nicht im Sprint"),
+            sp.length?React.createElement("div",{style:kl},sp.map(function(n){return "S"+n;}).join(" \u00b7 ")):null));
+      }));
+    // ── Sprints ──
+    var karten=React.createElement("div",{style:{flex:"2 1 520px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12,alignContent:"start"}},
+      sichtbar.map(function(x){
+        var ids=Object.keys(zu).filter(function(id){return zu[id][x.nr]!=null;});
+        var emps=employees.filter(function(e){return !hiddenEmp[e.name];});
+        var kapJe={},lastJe={};emps.forEach(function(e){kapJe[e.id]=sprKap(e,absenceMap,x.start,x.ende);lastJe[e.id]=0;});
+        ids.forEach(function(id){var p=pkgById[id];if(p&&lastJe[p.employee]!=null)lastJe[p.employee]+=Number(zu[id][x.nr])||0;});
+        var kap=emps.reduce(function(s,e){return s+kapJe[e.id];},0),last=ids.reduce(function(s,id){return s+(pkgById[id]?Number(zu[id][x.nr])||0:0);},0);
+        var aktiv=x.start<=heute&&heute<=x.ende,vorbei=x.ende<heute,quote=kap?last/kap:0;
+        return React.createElement("div",{key:x.nr,"data-spr-sprint":x.nr,
+          onDragOver:function(e){e.preventDefault();},onDrop:function(e){e.preventDefault();var t=e.dataTransfer.getData("text/plain")||"";if(t.indexOf("spr:")===0)einplanen(t.slice(4),x.nr);},
+          onClick:function(){if(sprWahl)einplanen(sprWahl,x.nr);},
+          style:{border:(sprWahl?"1.5px dashed "+A.mint:"1px solid "+(aktiv?A.mint:A.border)),borderRadius:"var(--r-lg)",background:A.surface,padding:"10px 12px",opacity:vorbei?.7:1,cursor:sprWahl?"copy":"default"}},
+          React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:6}},
+            React.createElement("b",{style:{color:A.text}},"Sprint "+x.nr+(aktiv?" \u00b7 l\u00e4uft":vorbei?" \u00b7 vorbei":"")),
+            React.createElement("span",{style:kl},tg(x.start)+" \u2013 ",
+              React.createElement("input",{type:"date",value:x.ende,"data-spr-ende":x.nr,title:"Ende dieses Sprints",onClick:function(e){e.stopPropagation();},
+                onChange:function(e){var v=e.target.value;aendern(function(n){if(!n.ende)n.ende={};if(v)n.ende[x.nr]=v;else delete n.ende[x.nr];});},style:Object.assign({},ein,{padding:"1px 3px",fontSize:"var(--fs-2xs)"})}))),
+          React.createElement("div",{style:{height:8,borderRadius:4,background:A.border,margin:"8px 0 3px",overflow:"hidden"}},
+            React.createElement("div",{style:{width:Math.min(100,quote*100)+"%",height:"100%",background:quote>1?A.coral:quote>0.85?A.amber:A.mint}})),
+          React.createElement("div",{style:Object.assign({},kl,{marginBottom:6})},nh(last)+" h von "+nh(kap)+" h Kapazit\u00e4t \u00b7 "+ids.length+" Workitems"),
+          emps.filter(function(e){return lastJe[e.id]>0;}).map(function(e){var ue=lastJe[e.id]>kapJe[e.id];
+            return React.createElement("div",{key:e.id,style:Object.assign({},kl,{display:"flex",justifyContent:"space-between",color:ue?A.coral:A.textMid})},
+              React.createElement("span",null,e.name),React.createElement("span",null,nh(lastJe[e.id])+" / "+nh(kapJe[e.id])+" h"+(ue?" \u26a0":"")));}),
+          React.createElement("div",{style:{marginTop:6,display:"flex",flexDirection:"column",gap:3}},
+            ids.map(function(id){var p=pkgById[id];
+              return React.createElement("div",{key:id,"data-spr-im":id,onClick:function(e){e.stopPropagation();},style:{display:"flex",gap:6,alignItems:"center",fontSize:"var(--fs-xs)",color:p?A.text:A.textLight}},
+                React.createElement("span",{style:{flex:1,minWidth:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},title:(p?p.title+" \u00b7 "+empName(p.employee):"nicht mehr offen")},(p?"":"\u2713 ")+(p?p.title||id:id)),
+                React.createElement("input",{type:"number",min:0,step:0.5,value:zu[id][x.nr],"data-spr-h":id+"@"+x.nr,title:"Stunden in diesem Sprint",
+                  onChange:function(e){var v=Math.max(0,Number(e.target.value)||0);aendern(function(n){n.zu[id][x.nr]=v;});},style:Object.assign({},ein,{width:52})}),
+                React.createElement("span",{style:kl},"h"),
+                React.createElement("button",{type:"button","data-spr-weg":id+"@"+x.nr,title:"aus dem Sprint nehmen",onClick:function(e){e.stopPropagation();entfernen(id,x.nr);},style:Object.assign({},knopf,{padding:"0 6px"})},"\u2715"));
+            }),
+            !ids.length?React.createElement("span",{style:kl},sprWahl?"antippen, um das gew\u00e4hlte Workitem einzuplanen":"Workitems hierher ziehen"):null));
+      }));
+    return React.createElement("div",{style:{padding:20,overflow:"auto",flex:1,minHeight:0}},kopf,
+      React.createElement("div",{style:{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-start"}},liste,karten));
+  }
   function ForecastView(){
     var s_hz=useState(function(){var v=+lsLoad("ptool_fc_horizont",4);return FC_HORIZONTE.some(function(x){return x[0]===v;})?v:4;});
     var hz=s_hz[0],setHz=s_hz[1];
@@ -11115,7 +11292,8 @@ function Planungstool(){
                   {key:"szenarien",label:"\uD83D\uDD2D Szenarien",badge:(scenarios||[]).length||null},
                   {key:"umplanung",label:"\uD83D\uDD04 Umplanung",badge:replanCount>0?replanCount:null},
                   {key:"konflikte",label:"\u26A1 Konflikte",badge:conflictChains.length>0?conflictChains.length:null},
-                  {key:"flow",label:"\uD83D\uDD00 Flow"}
+                  {key:"flow",label:"\uD83D\uDD00 Flow"},
+                  {key:"sprints",label:"\uD83C\uDFC3 Sprints",badge:sprMeld.length||null}
                 ]},
                 {title:"Auswertung",items:[
                   {key:"forecast",label:"\uD83D\uDCC8 Forecast"},
@@ -16283,9 +16461,9 @@ function Planungstool(){
             border:"1px solid "+A.border,background:"transparent",color:A.textMid}},"\u2715"):null
       )
     );
-    if(umplMode==="karten")return React.createElement(React.Fragment,null,modeSwitch,React.createElement(ViewHost,{key:"vh-UmplanungKartenView",render:UmplanungKartenView}));
+    if(umplMode==="karten")return React.createElement(React.Fragment,null,modeSwitch,sprBanner(),React.createElement(ViewHost,{key:"vh-UmplanungKartenView",render:UmplanungKartenView}));
 
-    return React.createElement(React.Fragment,null,modeSwitch,
+    return React.createElement(React.Fragment,null,modeSwitch,sprBanner(),
       React.createElement("div",{style:{padding:20,maxWidth:1100}},
       React.createElement("div",{style:{display:"flex",justifyContent:"flex-end",marginBottom:12}},
         React.createElement("button",{onClick:exportXlsx,style:{padding:"7px 16px",borderRadius:"var(--r-md)",cursor:"pointer",fontSize:"var(--fs-md)",fontWeight:700,border:"1.5px solid "+A.mint,background:A.mintLight,color:A.text,display:"flex",alignItems:"center",gap:6}},
@@ -17174,7 +17352,7 @@ function Planungstool(){
           borderBottom:"1px solid "+(simActive?A.amber:A.border),padding:"10px 20px",
           display:"flex",alignItems:"center",gap:10,flexShrink:0,flexWrap:"wrap",
           position:"relative",zIndex:30}},
-          React.createElement("h1",{style:{fontSize:"var(--fs-xl)",fontWeight:800,color:A.text,margin:0,flexShrink:0}},view==="dashboard"?(dashUser?("Moin, "+dashUser.split(" ")[0]):"Dashboard"):view==="auslastung"?(auslMode==="matrix"?"Auslastung \u00b7 Wochen-Matrix":auslMode==="bc"?"Auslastung \u00b7 nach BC":"Auslastung \u00b7 nach Mitarbeiter"):view==="report"?"Bericht":view==="forecast"?"Forecast":view==="szenarien"?"Szenarien":view==="umplanung"?"Umplanungsanalyse":view==="konflikte"?"Konflikt-Kaskaden":view==="architektur"?"Architekturübersicht":view==="anforderungen"?"Anforderungsverzeichnis":view==="rohdaten"?"Rohdaten-Tabelle":view==="flow"?"Flow-Ansicht":view==="bcplanung"?"BC-Planungsansicht":view==="mitarbeiter"?"Mitarbeiter":view==="zeit"?"Zeiterfassung":view==="planist"?"Plan vs. Ist":"Testfallkatalog"),
+          React.createElement("h1",{style:{fontSize:"var(--fs-xl)",fontWeight:800,color:A.text,margin:0,flexShrink:0}},view==="dashboard"?(dashUser?("Moin, "+dashUser.split(" ")[0]):"Dashboard"):view==="auslastung"?(auslMode==="matrix"?"Auslastung \u00b7 Wochen-Matrix":auslMode==="bc"?"Auslastung \u00b7 nach BC":"Auslastung \u00b7 nach Mitarbeiter"):view==="report"?"Bericht":view==="forecast"?"Forecast":view==="sprints"?"Sprints planen":view==="szenarien"?"Szenarien":view==="umplanung"?"Umplanungsanalyse":view==="konflikte"?"Konflikt-Kaskaden":view==="architektur"?"Architekturübersicht":view==="anforderungen"?"Anforderungsverzeichnis":view==="rohdaten"?"Rohdaten-Tabelle":view==="flow"?"Flow-Ansicht":view==="bcplanung"?"BC-Planungsansicht":view==="mitarbeiter"?"Mitarbeiter":view==="zeit"?"Zeiterfassung":view==="planist"?"Plan vs. Ist":"Testfallkatalog"),
           activeScen&&React.createElement("div",{"data-scen-inline":"1",
             style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",minWidth:0}},
             React.createElement("span",{style:{fontSize:"var(--fs-sm)",fontWeight:800,color:A.purple,flexShrink:0}},
@@ -17425,7 +17603,7 @@ function Planungstool(){
               )
             )
           ),
-          (view!=="umplanung"&&view!=="planist"&&view!=="architektur"&&view!=="anforderungen"&&view!=="testfaelle"&&view!=="rohdaten"&&view!=="zeit"&&view!=="dashboard"&&view!=="szenarien"&&view!=="report")&&React.createElement("div",{style:{position:"relative",flexShrink:0}},
+          (view!=="umplanung"&&view!=="planist"&&view!=="architektur"&&view!=="anforderungen"&&view!=="testfaelle"&&view!=="rohdaten"&&view!=="zeit"&&view!=="dashboard"&&view!=="szenarien"&&view!=="report"&&view!=="sprints"&&view!=="forecast")&&React.createElement("div",{style:{position:"relative",flexShrink:0}},
             React.createElement("button",{onClick:function(){setLegOpen(function(o){return !o;});},
               "data-legend-btn":"1",title:"Legende der Gantt-Darstellung",
               style:{width:28,height:28,borderRadius:"50%",cursor:"pointer",fontSize:"var(--fs-md)",fontWeight:800,
@@ -17467,7 +17645,7 @@ function Planungstool(){
         React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0,minHeight:0}},
 
           React.createElement("div",{id:"main-scroll",style:{flex:1,overflowX:"auto",overflowY:"auto"}},
-          view==="report"?React.createElement(ViewHost,{key:"vh-ReportView-"+(canSeeAll?1:0),render:ReportView}):view==="forecast"?React.createElement(ViewHost,{key:"vh-ForecastView-"+(canSeeAll?1:0),render:ForecastView}):view==="szenarien"?React.createElement(ViewHost,{key:"vh-SzenarienView",render:SzenarienView}):view==="planist"?React.createElement(ViewHost,{key:"vh-PlanIstView",render:PlanIstView}):
+          view==="report"?React.createElement(ViewHost,{key:"vh-ReportView-"+(canSeeAll?1:0),render:ReportView}):view==="forecast"?React.createElement(ViewHost,{key:"vh-ForecastView-"+(canSeeAll?1:0),render:ForecastView}):view==="sprints"?React.createElement(ViewHost,{key:"vh-SprintsView",render:SprintsView}):view==="szenarien"?React.createElement(ViewHost,{key:"vh-SzenarienView",render:SzenarienView}):view==="planist"?React.createElement(ViewHost,{key:"vh-PlanIstView",render:PlanIstView}):
           view==="dashboard"?React.createElement(ViewHost,{key:"vh-DashboardView",render:DashboardView}):view==="zeit"?React.createElement(ViewHost,{key:"vh-ZeitView",render:ZeitView}):view==="mitarbeiter"?React.createElement(ViewHost,{key:"vh-MitarbeiterView",render:MitarbeiterView}):view==="flow"?React.createElement(ViewHost,{key:"vh-FlowView",render:FlowView}):view==="bcplanung"?React.createElement(ViewHost,{key:"vh-BCPlanungView",render:BCPlanungView}):view==="rohdaten"?React.createElement(RohdatenView,{data:rawData,A:A}):view==="anforderungen"?React.createElement(ViewHost,{key:"vh-AnforderungenView",render:AnforderungenView}):view==="testfaelle"?React.createElement(ViewHost,{key:"vh-TestfaelleView",render:TestfaelleView}):view==="architektur"?React.createElement(ViewHost,{key:"vh-ArchitekturView",render:ArchitekturView}):view==="umplanung"?React.createElement(ViewHost,{key:"vh-UmplanungView",render:UmplanungView}):view==="konflikte"?React.createElement(ViewHost,{key:"vh-KonfliktView",render:KonfliktView}):React.createElement("div",{ref:ganttRef,style:{width:LW+tw,minWidth:LW+tw,position:"relative"}},
           React.createElement(ViewHost,{key:"vh-GanttHeader",render:GanttHeader}),React.createElement(ViewHost,{key:"vh-ausl-"+auslMode,render:auslMode==="matrix"?KapazitaetView:auslMode==="bc"?ReleaseView:AuslastungView}))
         )
