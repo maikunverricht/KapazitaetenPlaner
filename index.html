@@ -2551,7 +2551,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.6.0";
+var APP_VERSION="3.6.1";
+// v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
 // v3.6.0: Sprints -- Team-Sprints mit festen Zeiten, Workitems nach Dringlichkeit in Sprints einplanen (auch ueber mehrere Sprints); Workitems im Sprintzeitraum ausserhalb des Sprints melden sich in der Umplanung. Lesekopie wb-kapazitaetenplaner-sprint fuer das Kontor-Widget.
 // v3.5.1: Review-Anteil im Schritt einstellbar (vlauf.review, Standard 20 %).
 // v3.5.0: Rolle Review je Prozessschritt (zweite Ablage im kleinen V, Review-Workitems aus ClearQuest am Titel erkannt); Lesekopie mit entwickler/reviewer je Schritt.
@@ -4674,7 +4675,7 @@ var VL_SCHRITTE=[
   {k:"SWE.1",n:"Anforderung",      w:"Anforderungsbuch"},
   {k:"SWE.2",n:"Architektur",      w:"Schaltplan"},
   {k:"SWE.3",n:"Feinentwurf",      w:"Funktionsentwurf"},
-  {k:"SWE.4",n:"Unit",             w:"CodeCompare"},
+  {k:"SWE.4",n:"Unit-/Weakspottest",w:"TestcaseManager"},
   {k:"SWE.5",n:"Integrationstest", w:"TestcaseManager"},
   {k:"SWE.6",n:"Qualifikation",    w:"TestcaseManager"},
   {k:"ABS",  n:"Abschluss",        w:"KapazitätenPlaner"}
