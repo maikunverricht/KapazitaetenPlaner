@@ -2551,7 +2551,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.4.0";
+var APP_VERSION="3.4.1";
+// v3.4.1: Lesekopie traegt Plandaten der FCs (fcPlan) fuer die Issue-Kacheln im Kontor.
 // v3.4.0: ClearQuest-Workitems den Prozessschritten zuordnen (ersetzen eigene), Flow: BC nur BC-Release, FC nur verknuepfte FCs, Auftraege ausblenden; Szenarien dauerhaft aus.
 // v3.3.0: Forecast (aus der Auswertung umgezogen) -- offener Restaufwand je Mitarbeiter gegen Kapazitaet im Horizont, Prognose-Ende; Lesekopie wb-kapa-stand traegt forecast.
 // v3.2.0: Auftragsordner anlegen (Ablage-Wurzel, Unterordner, auftrag.json; ZIP-Fallback), aktiver Auftrag fuer alle Werkzeuge, Rueckmeldung der Werkzeuge je Schritt im V.
@@ -4451,7 +4452,7 @@ function buildIssueIndex(rows){
     if(row.bc_name){
       if(istFcTyp(_mt)){
         var lk=row.bc_id||row.bc_name;
-        if(!x._fcl.some(function(f){return (f.id||f.name)===lk;}))x._fcl.push({name:row.bc_name,id:row.bc_id||"",tags:"",desc:""});
+        if(!x._fcl.some(function(f){return (f.id||f.name)===lk;}))x._fcl.push({name:row.bc_name,id:row.bc_id||"",tags:"",desc:"",plan:row.bc_deadline||""});
       }else if(!x.bc){x.bc=row.bc_name;x.bcId=row.bc_id||"";x.bcPlan=row.bc_deadline||"";x.com=row.bc_committed||"";}
     }
     if(row.fc_name){
@@ -4459,7 +4460,7 @@ function buildIssueIndex(rows){
       var fx=null;x._kinder.forEach(function(f){if((f.id||f.name)===k)fx=f;});
       // v2.95.0: Tags und Beschreibung fuer die FC-Pruefung. Fehlten bisher --
       // Flow zeigte deshalb an jeder FC \u274c, auch wenn alles gepflegt war.
-      if(!fx){fx={name:row.fc_name,id:row.fc_id||"",tags:"",desc:""};x._kinder.push(fx);}
+      if(!fx){fx={name:row.fc_name,id:row.fc_id||"",tags:"",desc:"",plan:row.fc_deadline||""};x._kinder.push(fx);}
       if(row.fc_tags&&!fx.tags)fx.tags=String(row.fc_tags);
       if(row.fc_ext_desc&&!fx.desc)fx.desc=String(row.fc_ext_desc);
     }
@@ -4484,7 +4485,7 @@ function buildIssueIndex(rows){
     if(x._typ){
       x.fcs=x._fcl.map(function(f){
         var kd=x._kinder.find(function(c){return (f.id&&c.id===f.id)||c.name===f.name;});
-        return kd?{name:f.name,id:f.id||kd.id,tags:kd.tags,desc:kd.desc}:f;
+        return kd?{name:f.name,id:f.id||kd.id,tags:kd.tags,desc:kd.desc,plan:f.plan||kd.plan||""}:f;
       });
     }else x.fcs=x._kinder;
     if(!x.bc&&!x._typ&&x._bcErsatz)x.bc=x._bcErsatz;
@@ -4833,6 +4834,7 @@ function vlLesekopie(vl,idx,rels,emps,angemeldet){
       var l1=x.d?String(x.d):"";
       return {id:iid,titel:x.t||iid,lcs:x.l||"",bc:x.bc||"",bcPlan:x.bcPlan||"",
         fcs:(x.fcs||[]).map(function(f){return f.name;}).filter(Boolean),
+        fcPlan:(x.fcs||[]).filter(function(f){return f.name;}).map(function(f){return {name:f.name,plan:String(f.plan||"").slice(0,10)};}), // v3.4.1
         aufwand:Number(a.aufwand)||x.e||0,imV:wis.length>0,beteiligt:bet,
         l1:l1?[{id:iid+"-L1",t:l1.length>4000?l1.slice(0,4000)+"…":l1}]:[],
         ordner:a.ordner||{link:""},schritte:sch,
