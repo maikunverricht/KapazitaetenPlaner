@@ -2551,7 +2551,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.2.0";
+var APP_VERSION="3.3.0";
+// v3.3.0: Forecast (aus der Auswertung umgezogen) -- offener Restaufwand je Mitarbeiter gegen Kapazitaet im Horizont, Prognose-Ende; Lesekopie wb-kapa-stand traegt forecast.
 // v3.2.0: Auftragsordner anlegen (Ablage-Wurzel, Unterordner, auftrag.json; ZIP-Fallback), aktiver Auftrag fuer alle Werkzeuge, Rueckmeldung der Werkzeuge je Schritt im V.
 // v3.1.0: Lesekopie mit allen Issues, Beteiligten und angemeldetem Mitarbeiter (Kontor: meine Auftraege, V-Ampel).
 // v3.0.0: V-Durchlauf je Auftrag -- Mitarbeiter je Prozessschritt (Flow, Drag & Drop),
@@ -4210,6 +4211,7 @@ var NAV_ICON_PATHS={
   konflikte:["M13 3L5 13h6l-1 8 8-10h-6z"],
   flow:["M4 7h4l8 10h4","M4 17h4l2.5-3.1","M13.5 10.1L16 7h4","M18 5l2 2-2 2","M18 15l2 2-2 2"],
   report:["M7 3h7l4 4v14H7z","M14 3v4h4","M10 12h5","M10 15h5","M10 18h3"],
+  forecast:["M3.5 18.5l5.5-6 4 3.5 7-8","M15 8h5v5"],
   mitarbeiter:["M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z","M3.5 20c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5","M16 11a2.5 2.5 0 1 0 0-5","M17 15c2 .4 3.2 2 3.5 5"],
   zeit:["M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16z","M12 9v4l2.5 2","M10 2h4"],
   mehr:["M5 12h.01","M12 12h.01","M19 12h.01"],
@@ -4800,6 +4802,41 @@ function vlLesekopie(vl,idx,rels,emps,angemeldet){
     })};
 }
 
+// ════════════════════════════════════════════════════════════════════
+// v3.3.0 — FORECAST (aus der Auswertung hierher umgezogen, 18.11.2026)
+// Offener Aufwand je Mitarbeiter gegen die Kapazitaet im Horizont. Anders als
+// in der Auswertung aus dem Planungsbestand: Restaufwand statt Schaetzung,
+// Wochenstunden und Abwesenheiten aus dem Planer, V-Workitems eingeschlossen,
+// dazu das Prognose-Ende aus der Kapazitaetsrechnung (runAnalysis).
+// ════════════════════════════════════════════════════════════════════
+var FC_HORIZONTE=[[1,"1 Woche"],[2,"2 Wochen"],[4,"4 Wochen"],[8,"8 Wochen"],[13,"Quartal"]];
+function fcBerechnen(emps,pkgs,analysis,absMap,hz){
+  var heute=dateStr(new Date()),capEndOf={};
+  (analysis||[]).forEach(function(r){if(r&&r.pkg)capEndOf[r.pkg.id]=r.capEnd;});
+  var start=new Date();start.setHours(0,0,0,0);
+  return (emps||[]).map(function(e){
+    var wh=Number(e.weeklyHours)||35,am=(absMap&&absMap[e.id])||{},cap=0,tage=0;
+    for(var i=0;i<hz*7;i++){var d=new Date(start);d.setDate(start.getDate()+i);if(isWE(d)||am[dateStr(d)])continue;cap+=wh/5;tage++;}
+    var mine=(pkgs||[]).filter(function(p){return p&&p.employee===e.id&&p.lcs!=="closed";});
+    var h=0,od=0,noe=0,nv=0,ende="";
+    mine.forEach(function(p){
+      var r=p.remainingHours!=null?Number(p.remainingHours)||0:Number(p.hours)||0;h+=r;
+      if(!(Number(p.hours)>0)&&!(r>0))noe++;
+      if(p.end&&p.end<heute)od++;
+      if(p._v)nv++;
+      var ce=capEndOf[p.id]||p.end;if(ce&&ce>ende)ende=ce;
+    });
+    return {id:e.id,a:e.name,role:e.role||"",n:mine.length,h:Math.round(h*10)/10,wh:wh,tage:tage,cap:Math.round(cap*10)/10,
+      d:Math.round((cap-h)*10)/10,u:cap?h/cap:null,wk:wh?h/wh:null,od:od,noe:noe,nv:nv,ende:ende};
+  });
+}
+function fcSumme(rows){
+  var S={n:0,h:0,wh:0,cap:0,d:0,od:0,noe:0,nv:0,ende:""};
+  rows.forEach(function(r){S.n+=r.n;S.h+=r.h;S.wh+=r.wh;S.cap+=r.cap;S.d+=r.d;S.od+=r.od;S.noe+=r.noe;S.nv+=r.nv;if(r.ende>S.ende)S.ende=r.ende;});
+  S.h=Math.round(S.h*10)/10;S.cap=Math.round(S.cap*10)/10;S.d=Math.round(S.d*10)/10;
+  S.u=S.cap?S.h/S.cap:null;S.wk=S.wh?S.h/S.wh:null;S.ueber=rows.filter(function(r){return r.h>r.cap;}).length;
+  return S;
+}
 function normalizeToClearQuestTable(rawRows){
   function _get(row,srcList,ci){for(var i=0;i<srcList.length;i++){var v=row[srcList[i]];if(v!==undefined&&v!==null&&String(v).trim()!="")return String(v).trim();}
     // v2.96.2: fuer die Typ-Spalten auch ohne Gross-/Kleinschreibung und Leerzeichen am Rand
@@ -7915,9 +7952,13 @@ function Planungstool(){
       jetzt.sort(function(a,b){return b.p-a.p;});
       localStorage.setItem("wb-kapa-stand",JSON.stringify({app:"werkbank-kapazitaetenplaner",version:1,
         stand:new Date().toISOString(),mitarbeiter:emps.length,nur:canSeeAll?null:(selfEmp?selfEmp.name:null),wochen:wochen,
-        ueberlastet:jetzt.filter(function(x){return x.p>100;}).length,spitze:jetzt.slice(0,3)}));
+        ueberlastet:jetzt.filter(function(x){return x.p>100;}).length,spitze:jetzt.slice(0,3),
+        // v3.3.0: Forecast (vorher in der Auswertung) -- 1 Woche Horizont fuer die Kontor-Kachel
+        forecast:(function(){var r=fcBerechnen(emps,allPkgs,analysis,absenceMap,1),S=fcSumme(r);
+          return {horizont:1,offen:S.n,h:S.h,cap:S.cap,ueberfaellig:S.od,n:r.length,ueberlastet:S.ueber,ende:S.ende,
+            personen:r.filter(function(x){return x.cap>0;}).sort(function(a,b){return b.h/b.cap-a.h/a.cap;}).slice(0,8).map(function(x){return {a:x.a,h:x.h,cap:x.cap};})};})()}));
     }catch(e){}
-  },[loadMap,absenceMap,employees,hiddenEmp,canSeeAll,selfEmp]);
+  },[loadMap,absenceMap,employees,hiddenEmp,canSeeAll,selfEmp,allPkgs,analysis]);
   // ── v2.98.0: Briefing ──────────────────────────────────────────────
   // Steht HINTER analysis, loadMap und absenceMap -- weiter oben waeren sie
   // per Hoisting undefined (v2.20.11). Das Datum kommt je Render herein,
@@ -9622,6 +9663,80 @@ function Planungstool(){
   // Bedienelemente im Inhalt: was hier steht, soll unveraendert auf Papier
   // oder ins PDF gehen.
   // ══════════════════════════════════════════════════════════════════
+  // v3.3.0: Forecast -- offener Aufwand gegen Kapazitaet im Horizont (aus der Auswertung umgezogen)
+  function ForecastView(){
+    var s_hz=useState(function(){var v=+lsLoad("ptool_fc_horizont",4);return FC_HORIZONTE.some(function(x){return x[0]===v;})?v:4;});
+    var hz=s_hz[0],setHz=s_hz[1];
+    var s_so=useState("d");var sortK=s_so[0],setSortK=s_so[1];
+    var emps=visibleEmployees().filter(function(e){return !hiddenEmp[e.name];});
+    var rows=fcBerechnen(emps,allPkgs,analysis,absenceMap,hz);
+    var S=fcSumme(rows);
+    var nf=function(v){return (Math.round(v*10)/10).toLocaleString("de-DE");};
+    var pct=function(v){return v==null?"–":Math.round(v*100)+" %";};
+    var tag=function(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7)+"."+iso.slice(2,4):"–";};
+    var SORT={d:function(a,b){return a.d-b.d;},h:function(a,b){return b.h-a.h;},u:function(a,b){return (b.u||0)-(a.u||0);},
+      wk:function(a,b){return (b.wk||0)-(a.wk||0);},n:function(a,b){return b.n-a.n;},od:function(a,b){return b.od-a.od;},
+      ende:function(a,b){return String(b.ende).localeCompare(String(a.ende));},a:function(a,b){return String(a.a).localeCompare(String(b.a));}};
+    rows.sort(SORT[sortK]||SORT.d);
+    var kart={background:A.surface,border:"1px solid "+A.border,borderRadius:"var(--r-lg)",padding:"12px 14px",display:"flex",flexDirection:"column",gap:2,minWidth:0};
+    var gross={fontSize:"var(--fs-xl)",fontWeight:800,color:A.text,fontVariantNumeric:"tabular-nums"};
+    var klein={fontSize:"var(--fs-2xs)",color:A.textLight};
+    var hzTxt=(FC_HORIZONTE.find(function(x){return x[0]===hz;})||[0,""])[1];
+    function kpi(t,w,sub,rot){return React.createElement("div",{style:kart},React.createElement("span",{style:klein},t),
+      React.createElement("span",{style:Object.assign({},gross,rot?{color:A.coral}:{})},w),React.createElement("span",{style:klein},sub));}
+    var max=Math.max.apply(null,[1].concat(rows.map(function(r){return Math.max(r.h,r.cap);})));
+    var balken=React.createElement("div",{"data-fc-balken":"1",style:{display:"flex",flexDirection:"column",gap:6,margin:"14px 0"}},
+      rows.map(function(r){
+        var last=r.h/max*100,kap=r.cap/max*100,ueber=r.h>r.cap;
+        return React.createElement("div",{key:r.id,style:{display:"grid",gridTemplateColumns:"minmax(110px,180px) 1fr 70px",gap:10,alignItems:"center"}},
+          React.createElement("span",{style:{fontSize:"var(--fs-sm)",color:A.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},title:r.a},r.a),
+          React.createElement("div",{style:{position:"relative",height:14,background:A.bg,borderRadius:7,overflow:"hidden"}},
+            React.createElement("div",{style:{position:"absolute",left:0,top:0,bottom:0,width:Math.min(last,kap)+"%",background:A.sky,borderRadius:7}}),
+            ueber?React.createElement("div",{style:{position:"absolute",left:kap+"%",top:0,bottom:0,width:(last-kap)+"%",background:A.coral}}):null,
+            React.createElement("div",{title:"Kapazität "+nf(r.cap)+" h",style:{position:"absolute",left:"calc("+kap+"% - 1px)",top:-2,bottom:-2,width:2,background:A.text}})),
+          React.createElement("span",{style:{fontSize:"var(--fs-xs)",color:ueber?A.coral:A.textMid,textAlign:"right",fontVariantNumeric:"tabular-nums"}},pct(r.u)));
+      }));
+    var th=function(k,t,tip){return React.createElement("th",{key:k,title:tip||"",onClick:function(){setSortK(k);},
+      style:{textAlign:k==="a"?"left":"right",padding:"6px 8px",fontSize:"var(--fs-2xs)",color:sortK===k?A.text:A.textMid,fontWeight:sortK===k?800:600,cursor:"pointer",whiteSpace:"nowrap",borderBottom:"1px solid "+A.border}},t+(sortK===k?" ▾":""));};
+    var td=function(v,st){return React.createElement("td",{style:Object.assign({padding:"6px 8px",textAlign:"right",fontSize:"var(--fs-sm)",fontVariantNumeric:"tabular-nums",borderBottom:"1px solid "+A.border,whiteSpace:"nowrap"},st||{})},v);};
+    function zeile(r,summe){
+      return React.createElement("tr",{key:summe?"sum":r.id,style:summe?{fontWeight:800}:null},
+        td(summe?"Summe":r.a,{textAlign:"left",fontWeight:summe?800:600,color:A.text}),
+        td(r.n),td(nf(r.h)),td(summe?nf(r.wh):r.wh),td(nf(r.cap)),
+        td((r.d>=0?"+":"−")+nf(Math.abs(r.d)),{color:r.d<0?A.coral:A.green}),
+        td(pct(r.u),{color:r.u>1?A.coral:A.textMid}),td(r.wk==null?"–":nf(r.wk)),
+        td(r.od||"–",{color:r.od?A.coral:A.textLight}),td(r.noe||"–",{color:r.noe?A.amber:A.textLight}),
+        td(r.nv||"–",{color:A.textMid}),td(tag(r.ende),{color:A.textMid}));
+    }
+    return React.createElement("div",{"data-fc-view":"1",style:{padding:"16px 20px 40px",maxWidth:1200}},
+      React.createElement("div",{style:{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:12}},
+        React.createElement("span",{style:{fontSize:"var(--fs-sm)",color:A.textMid}},"Offene Workitems je Mitarbeiter gegen die Kapazität im Horizont · Restaufwand, Wochenstunden und Abwesenheiten aus dem Planer"),
+        React.createElement("label",{style:{marginLeft:"auto",display:"inline-flex",gap:6,alignItems:"center",fontSize:"var(--fs-sm)",color:A.textMid}},"Horizont",
+          React.createElement("select",{"data-fc-horizont":"1",value:hz,onChange:function(e){var v=+e.target.value;setHz(v);try{localStorage.setItem("ptool_fc_horizont",String(v));}catch(x){}},
+            style:{padding:"4px 8px",borderRadius:"var(--r-md)",border:"1px solid "+A.border,background:A.surface,color:A.text}},
+            FC_HORIZONTE.map(function(x){return React.createElement("option",{key:x[0],value:x[0]},x[1]);})))),
+      React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}},
+        kpi("Offene Workitems",String(S.n),S.nv?S.nv+" aus dem V-Durchlauf":"nicht closed"),
+        kpi("Offener Aufwand",nf(S.h)+" h",S.noe?S.noe+" ohne Schätzung":"alle geschätzt",false),
+        kpi("Kapazität",nf(S.cap)+" h",hzTxt+" · "+rows.length+" Personen"),
+        kpi("Differenz",(S.d>=0?"+":"−")+nf(Math.abs(S.d))+" h",S.d<0?"Überlast":"frei",S.d<0),
+        kpi("Überlastet",S.ueber+" von "+rows.length,"über Kapazität",S.ueber>0),
+        kpi("Überfällig",String(S.od),"Plandatum vor heute",S.od>0),
+        kpi("Prognose-Ende",tag(S.ende),"letztes Workitem nach Kapazität")),
+      rows.length?balken:React.createElement("p",{style:{color:A.textLight,fontSize:"var(--fs-sm)"}},canSeeAll?"Keine Mitarbeiter.":"Nur in der erweiterten Ansicht oder nach Anmeldung sichtbar."),
+      React.createElement("div",{style:{overflowX:"auto"}},
+        React.createElement("table",{"data-fc-tabelle":"1",style:{borderCollapse:"collapse",width:"100%",minWidth:860}},
+          React.createElement("thead",null,React.createElement("tr",null,
+            th("a","Mitarbeiter"),th("n","Offene WI"),th("h","Offener Aufwand h","Summe Restaufwand der offenen Workitems"),
+            React.createElement("th",{key:"wh",style:{textAlign:"right",padding:"6px 8px",fontSize:"var(--fs-2xs)",color:A.textMid,borderBottom:"1px solid "+A.border}},"Wochenstd."),
+            React.createElement("th",{key:"cap",title:"Wochenstunden ÷ 5 je Arbeitstag im Horizont, ohne Wochenende, Feiertage und Abwesenheiten",style:{textAlign:"right",padding:"6px 8px",fontSize:"var(--fs-2xs)",color:A.textMid,borderBottom:"1px solid "+A.border}},"Kapazität h"),
+            th("d","Differenz h"),th("u","Auslastung"),th("wk","Reichweite Wo.","Offener Aufwand ÷ Wochenstunden"),th("od","überfällig"),
+            React.createElement("th",{key:"noe",style:{textAlign:"right",padding:"6px 8px",fontSize:"var(--fs-2xs)",color:A.textMid,borderBottom:"1px solid "+A.border}},"ohne Schätzung"),
+            React.createElement("th",{key:"nv",style:{textAlign:"right",padding:"6px 8px",fontSize:"var(--fs-2xs)",color:A.textMid,borderBottom:"1px solid "+A.border}},"V-WI"),
+            th("ende","Prognose-Ende","Ende des letzten offenen Workitems nach der Kapazitätsrechnung"))),
+          React.createElement("tbody",null,rows.map(function(r){return zeile(r,false);}),rows.length>1?zeile(S,true):null))));
+  }
+
   function ReportView(){
     // v2.75.0: Der Bericht nennt Namen und Auslastung des ganzen Teams.
     if(!canSeeAll)return React.createElement("div",{"data-report-locked":"1","data-locked-hint":"1",
@@ -10893,6 +11008,7 @@ function Planungstool(){
                   {key:"flow",label:"\uD83D\uDD00 Flow"}
                 ]},
                 {title:"Auswertung",items:[
+                  {key:"forecast",label:"\uD83D\uDCC8 Forecast"},
                   {key:"report",label:"\uD83D\uDCC4 Bericht"}
                 ]},
                 {title:"Team & Zeit",items:[
@@ -16837,7 +16953,7 @@ function Planungstool(){
           borderBottom:"1px solid "+(simActive?A.amber:A.border),padding:"10px 20px",
           display:"flex",alignItems:"center",gap:10,flexShrink:0,flexWrap:"wrap",
           position:"relative",zIndex:30}},
-          React.createElement("h1",{style:{fontSize:"var(--fs-xl)",fontWeight:800,color:A.text,margin:0,flexShrink:0}},view==="dashboard"?(dashUser?("Moin, "+dashUser.split(" ")[0]):"Dashboard"):view==="auslastung"?(auslMode==="matrix"?"Auslastung \u00b7 Wochen-Matrix":auslMode==="bc"?"Auslastung \u00b7 nach BC":"Auslastung \u00b7 nach Mitarbeiter"):view==="report"?"Bericht":view==="szenarien"?"Szenarien":view==="umplanung"?"Umplanungsanalyse":view==="konflikte"?"Konflikt-Kaskaden":view==="architektur"?"Architekturübersicht":view==="anforderungen"?"Anforderungsverzeichnis":view==="rohdaten"?"Rohdaten-Tabelle":view==="flow"?"Flow-Ansicht":view==="bcplanung"?"BC-Planungsansicht":view==="mitarbeiter"?"Mitarbeiter":view==="zeit"?"Zeiterfassung":view==="planist"?"Plan vs. Ist":"Testfallkatalog"),
+          React.createElement("h1",{style:{fontSize:"var(--fs-xl)",fontWeight:800,color:A.text,margin:0,flexShrink:0}},view==="dashboard"?(dashUser?("Moin, "+dashUser.split(" ")[0]):"Dashboard"):view==="auslastung"?(auslMode==="matrix"?"Auslastung \u00b7 Wochen-Matrix":auslMode==="bc"?"Auslastung \u00b7 nach BC":"Auslastung \u00b7 nach Mitarbeiter"):view==="report"?"Bericht":view==="forecast"?"Forecast":view==="szenarien"?"Szenarien":view==="umplanung"?"Umplanungsanalyse":view==="konflikte"?"Konflikt-Kaskaden":view==="architektur"?"Architekturübersicht":view==="anforderungen"?"Anforderungsverzeichnis":view==="rohdaten"?"Rohdaten-Tabelle":view==="flow"?"Flow-Ansicht":view==="bcplanung"?"BC-Planungsansicht":view==="mitarbeiter"?"Mitarbeiter":view==="zeit"?"Zeiterfassung":view==="planist"?"Plan vs. Ist":"Testfallkatalog"),
           activeScen&&React.createElement("div",{"data-scen-inline":"1",
             style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",minWidth:0}},
             React.createElement("span",{style:{fontSize:"var(--fs-sm)",fontWeight:800,color:A.purple,flexShrink:0}},
@@ -17130,7 +17246,7 @@ function Planungstool(){
         React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0,minHeight:0}},
 
           React.createElement("div",{id:"main-scroll",style:{flex:1,overflowX:"auto",overflowY:"auto"}},
-          view==="report"?React.createElement(ViewHost,{key:"vh-ReportView-"+(canSeeAll?1:0),render:ReportView}):view==="szenarien"?React.createElement(ViewHost,{key:"vh-SzenarienView",render:SzenarienView}):view==="planist"?React.createElement(ViewHost,{key:"vh-PlanIstView",render:PlanIstView}):
+          view==="report"?React.createElement(ViewHost,{key:"vh-ReportView-"+(canSeeAll?1:0),render:ReportView}):view==="forecast"?React.createElement(ViewHost,{key:"vh-ForecastView-"+(canSeeAll?1:0),render:ForecastView}):view==="szenarien"?React.createElement(ViewHost,{key:"vh-SzenarienView",render:SzenarienView}):view==="planist"?React.createElement(ViewHost,{key:"vh-PlanIstView",render:PlanIstView}):
           view==="dashboard"?React.createElement(ViewHost,{key:"vh-DashboardView",render:DashboardView}):view==="zeit"?React.createElement(ViewHost,{key:"vh-ZeitView",render:ZeitView}):view==="mitarbeiter"?React.createElement(ViewHost,{key:"vh-MitarbeiterView",render:MitarbeiterView}):view==="flow"?React.createElement(ViewHost,{key:"vh-FlowView",render:FlowView}):view==="bcplanung"?React.createElement(ViewHost,{key:"vh-BCPlanungView",render:BCPlanungView}):view==="rohdaten"?React.createElement(RohdatenView,{data:rawData,A:A}):view==="anforderungen"?React.createElement(ViewHost,{key:"vh-AnforderungenView",render:AnforderungenView}):view==="testfaelle"?React.createElement(ViewHost,{key:"vh-TestfaelleView",render:TestfaelleView}):view==="architektur"?React.createElement(ViewHost,{key:"vh-ArchitekturView",render:ArchitekturView}):view==="umplanung"?React.createElement(ViewHost,{key:"vh-UmplanungView",render:UmplanungView}):view==="konflikte"?React.createElement(ViewHost,{key:"vh-KonfliktView",render:KonfliktView}):React.createElement("div",{ref:ganttRef,style:{width:LW+tw,minWidth:LW+tw,position:"relative"}},
           React.createElement(ViewHost,{key:"vh-GanttHeader",render:GanttHeader}),React.createElement(ViewHost,{key:"vh-ausl-"+auslMode,render:auslMode==="matrix"?KapazitaetView:auslMode==="bc"?ReleaseView:AuslastungView}))
         )
