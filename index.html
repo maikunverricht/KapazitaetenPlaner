@@ -2551,7 +2551,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.4.1";
+var APP_VERSION="3.4.2";
+// v3.4.2: Flow aufgeklappt -- vollstaendige Workitem-Liste (auch closed, Ausgeblendete, ohne Release), keine doppelten Zeilen mehr.
 // v3.4.1: Lesekopie traegt Plandaten der FCs (fcPlan) fuer die Issue-Kacheln im Kontor.
 // v3.4.0: ClearQuest-Workitems den Prozessschritten zuordnen (ersetzen eigene), Flow: BC nur BC-Release, FC nur verknuepfte FCs, Auftraege ausblenden; Szenarien dauerhaft aus.
 // v3.3.0: Forecast (aus der Auswertung umgezogen) -- offener Restaufwand je Mitarbeiter gegen Kapazitaet im Horizont, Prognose-Ende; Lesekopie wb-kapa-stand traegt forecast.
@@ -14339,10 +14340,29 @@ function Planungstool(){
   // Schrittaufwand = Auftragsaufwand x Anteil, gleich auf die offenen,
   // nicht von Hand geschaetzten Workitems des Schritts verteilt (min. 1 h).
   // v3.4.0: dem Schritt zugeordnete ClearQuest-Workitems (Pakete aus dem Import)
+  // v3.4.2: ALLE ClearQuest-Workitems eines Issues -- auch abgeschlossene, die
+  // von ausgeblendeten Mitarbeitern und solche ohne Release (dann aus den
+  // Rohdaten). allPkgs taugt dafuer nicht: es laesst closed und Ausgeblendete weg.
+  function vlCqPakete(iid){
+    var x=(issueIdxRaw&&issueIdxRaw[iid])||{},alle={},roh={},ids=[];
+    releases.forEach(function(r){if(!r)return;(r.directPackages||[]).forEach(function(p){if(p&&!p._v)alle[p.id]=p;});
+      (r.components||[]).forEach(function(c){(c.packages||[]).forEach(function(p){if(p&&!p._v)alle[p.id]=p;});});});
+    (rawData||[]).forEach(function(row){if(!row||String(row.iss_id||"").trim()!==iid)return;var w=String(row.wi_id||"").trim();if(w&&!roh[w])roh[w]=row;});
+    (x.wis||[]).concat(Object.keys(roh)).forEach(function(id){if(id&&ids.indexOf(id)<0)ids.push(id);});
+    return ids.map(function(id){
+      if(alle[id])return alle[id];
+      var row=roh[id];if(!row)return null;
+      var em=matchEmployeeByName(String(row.wi_assignee||"").replace(/\s*\([^()]*\)\s*$/,""),employees);
+      var h=parseFloat(String(row.wi_aufwand_h||"").replace(",","."))||0,rh=parseFloat(String(row.wi_rem_h||"").replace(",","."));
+      return {id:id,title:row.wi_titel||id,employee:em?em.id:"",lcs:String(row.wi_status||"").toLowerCase(),hours:h,
+        remainingHours:isFinite(rh)?rh:h,start:String(row.wi_start||"").slice(0,10),end:String(row.wi_end||"").slice(0,10),_roh:true};
+    }).filter(Boolean);
+  }
   function vlCqVon(a,k){
     var z=(a&&a.cq)||{},nb={};employees.forEach(function(e){nb[e.id]=e.name;});
+    var P={};if(a&&a.iid)vlCqPakete(a.iid).forEach(function(p){P[p.id]=p;});
     return Object.keys(z).filter(function(id){return !k||z[id]===k;}).map(function(id){
-      var p=allPkgs.find(function(x){return x.id===id&&!x._v;});return p?Object.assign(vlCqAlsWi(p,nb),{k:z[id]}):null;}).filter(Boolean);
+      var p=P[id];return p?Object.assign(vlCqAlsWi(p,nb),{k:z[id]}):null;}).filter(Boolean);
   }
   function vlVerteilen(n,a,k){
     var ws=vlWisVon(a,k).filter(function(w){return w.lcs!=="closed"&&!w.hFix;});
@@ -14471,7 +14491,7 @@ function Planungstool(){
     var darf=!!canSeeAll;
     var wahl=vlWahl&&vlWahl.iid===iid?vlWahl:null;
     var erg=vlErgebnisse(iid); // v3.2.0
-    var cqAlle=(x.wis||[]).filter(function(id){return !(a&&a.wis&&a.wis[id]);}).map(function(id){return allPkgs.find(function(p){return p.id===id&&!p._v;});}).filter(Boolean);
+    var cqAlle=vlCqPakete(iid).filter(function(p){return !(a&&a.wis&&a.wis[p.id]);}); // v3.4.2: vollstaendig
     var cqZu=vlCqVon(a,null);
     var statusFarbe={"":A.border,"new":A.borderMid,"started":A.sky,"blocked":A.coral,"closed":A.green};
     var statusText={"":"",new:"offen",started:"in Arbeit",blocked:"blockiert",closed:"erledigt"};
@@ -15616,8 +15636,9 @@ function Planungstool(){
         // v3.0.0: V-Durchlauf des Auftrags
         isExp&&!iss.isWi&&React.createElement("tr",{key:"vl-"+iss.id,style:{background:A.bg,borderBottom:"1px solid "+A.border}},
           React.createElement("td",{colSpan:visCols.length+1,style:{padding:0}},vlPanel(iss))),
-        // WI-Detail-Zeilen
-        isExp&&iss.wis.map(function(pkg){
+        // WI-Detail-Zeilen -- v3.4.2: nur noch fuer PVER-Workitem-Zeilen; bei
+        // Issues stehen alle Workitems im V-Bereich (sonst doppelt)
+        isExp&&iss.isWi&&iss.wis.map(function(pkg){
           var emp=employees.find(function(e){return e.id===pkg.employee;});
           return React.createElement("tr",{key:"wi-"+pkg.id,
             style:{background:A.bg,borderBottom:"1px solid "+alpha(A.border,"44")}},
