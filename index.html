@@ -2551,7 +2551,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.3.0";
+var APP_VERSION="3.4.0";
+// v3.4.0: ClearQuest-Workitems den Prozessschritten zuordnen (ersetzen eigene), Flow: BC nur BC-Release, FC nur verknuepfte FCs, Auftraege ausblenden; Szenarien dauerhaft aus.
 // v3.3.0: Forecast (aus der Auswertung umgezogen) -- offener Restaufwand je Mitarbeiter gegen Kapazitaet im Horizont, Prognose-Ende; Lesekopie wb-kapa-stand traegt forecast.
 // v3.2.0: Auftragsordner anlegen (Ablage-Wurzel, Unterordner, auftrag.json; ZIP-Fallback), aktiver Auftrag fuer alle Werkzeuge, Rueckmeldung der Werkzeuge je Schritt im V.
 // v3.1.0: Lesekopie mit allen Issues, Beteiligten und angemeldetem Mitarbeiter (Kontor: meine Auftraege, V-Ampel).
@@ -3350,7 +3351,11 @@ var VIEW_MODULE={
   planist:"report",
   report:"report"
 };
+// v3.4.0 (Maik, 18.11.2026): Szenarien vorerst dauerhaft ausgeblendet. Ansicht,
+// Navigation und aktives Szenario sind aus; gespeicherte Szenarien bleiben liegen.
+var SZENARIEN_AUS=true;
 function viewAllowed(v){
+  if(v==="szenarien"&&SZENARIEN_AUS)return false;
   var m=VIEW_MODULE[v];
   if(m&&!modOn(m))return false;
   // Die Auslastung braucht mindestens eine ihrer beiden Gruppierungen.
@@ -4435,14 +4440,26 @@ function buildIssueIndex(rows){
     if(!id)return;
     var x=m[id];
     if(!x)x=m[id]={t:row.iss_titel||id,l:String(row.iss_status||"").toLowerCase(),
-      bc:row.bc_name||"",bcId:row.bc_id||"",bcPlan:row.bc_deadline||"",com:row.bc_committed||"",fcs:[],wis:[],rt:[]};
+      bc:"",bcId:"",bcPlan:"",com:"",fcs:[],wis:[],rt:[],_kinder:[],_fcl:[],_typ:false};
     if(!x.rt)x.rt=[];
+    // v3.4.0 (Maik): Spalte BC = nur das BC-Release, Spalte FC = nur die am Issue
+    // verknuepften FCs. Ein gemapptes Release vom Typ FC ist eine verknuepfte FC,
+    // kein BC. Die Kinder des BC (hasMappedChildren) sind nicht automatisch am
+    // Issue -- sie liefern nur Tags und Beschreibung der verknuepften FCs.
+    var _mt=String(row.bc_typ||"").trim();
+    if(_mt)x._typ=true;
+    if(row.bc_name){
+      if(istFcTyp(_mt)){
+        var lk=row.bc_id||row.bc_name;
+        if(!x._fcl.some(function(f){return (f.id||f.name)===lk;}))x._fcl.push({name:row.bc_name,id:row.bc_id||"",tags:"",desc:""});
+      }else if(!x.bc){x.bc=row.bc_name;x.bcId=row.bc_id||"";x.bcPlan=row.bc_deadline||"";x.com=row.bc_committed||"";}
+    }
     if(row.fc_name){
       var k=row.fc_id||row.fc_name;
-      var fx=null;x.fcs.forEach(function(f){if((f.id||f.name)===k)fx=f;});
+      var fx=null;x._kinder.forEach(function(f){if((f.id||f.name)===k)fx=f;});
       // v2.95.0: Tags und Beschreibung fuer die FC-Pruefung. Fehlten bisher --
       // Flow zeigte deshalb an jeder FC \u274c, auch wenn alles gepflegt war.
-      if(!fx){fx={name:row.fc_name,id:row.fc_id||"",tags:"",desc:""};x.fcs.push(fx);}
+      if(!fx){fx={name:row.fc_name,id:row.fc_id||"",tags:"",desc:""};x._kinder.push(fx);}
       if(row.fc_tags&&!fx.tags)fx.tags=String(row.fc_tags);
       if(row.fc_ext_desc&&!fx.desc)fx.desc=String(row.fc_ext_desc);
     }
@@ -4459,8 +4476,28 @@ function buildIssueIndex(rows){
     var w=String(row.wi_id||"").trim();
     if(w&&x.wis.indexOf(w)<0)x.wis.push(w);
   });
+  // v3.4.0: FC-Liste festlegen. Traegt der Export Release-Typen, zaehlen nur die
+  // verknuepften FCs (Tags/Beschreibung aus den Kindern, wenn gleich). Ohne
+  // Typ-Spalte bleibt es beim bisherigen Verhalten (Kinder des BC).
+  Object.keys(m).forEach(function(id){
+    var x=m[id];
+    if(x._typ){
+      x.fcs=x._fcl.map(function(f){
+        var kd=x._kinder.find(function(c){return (f.id&&c.id===f.id)||c.name===f.name;});
+        return kd?{name:f.name,id:f.id||kd.id,tags:kd.tags,desc:kd.desc}:f;
+      });
+    }else x.fcs=x._kinder;
+    if(!x.bc&&!x._typ&&x._bcErsatz)x.bc=x._bcErsatz;
+    delete x._kinder;delete x._fcl;delete x._typ;
+  });
   return m;
 }
+// v3.4.0: ClearQuest-Workitem in der Form eines V-Workitems (fuer Status, Lesekopie, Anzeige)
+function vlCqLcs(l){l=String(l||"").toLowerCase();return l==="closed"||l==="canceled"?"closed":l==="started"?"started":"new";}
+function vlCqAlsWi(p,nameById){var r=p.remainingHours!=null?Number(p.remainingHours)||0:Number(p.hours)||0;
+  return {id:p.id,cq:true,ma:(nameById&&nameById[p.employee])||"",titel:p.title||p.id,h:Number(p.hours)||0,rest:vlCqLcs(p.lcs)==="closed"?0:r,start:p.start||"",end:p.end||"",lcs:vlCqLcs(p.lcs)};}
+// Release-Typ FC (Component/Funktionscontainer); PVER und BC zaehlen als BC-Seite.
+function istFcTyp(t){t=String(t||"");return !isPverTyp(t)&&(/(^|[^A-Z])FC([^A-Z]|$)/i.test(t)||/component|komponent/i.test(t));}
 // PVER-Erkennung. v2.96.2 (Maik): aufgeloest wird ein Issue, wenn sein Typ
 // IssueSW ist UND das gemappte Release (oder Kind-Release) vom Typ PVER.
 function isPverTyp(t){return /(^|[^A-Z])PVER([^A-Z]|$)/i.test(String(t||""));}
@@ -4777,8 +4814,11 @@ function vlLesekopie(vl,idx,rels,emps,angemeldet){
       var a=au[iid]||{wis:{}},x=ix[iid]||{},wis=Object.keys(a.wis||{}).map(function(k){return a.wis[k];});
       var sch={},bet=[];
       function dabei(n){if(n&&bet.indexOf(n)<0)bet.push(n);}
+      // v3.4.0: zugeordnete ClearQuest-Workitems zaehlen im Schritt mit
+      var cqz=a.cq||{};
       VL_SCHRITTE.forEach(function(s){
-        var ws=wis.filter(function(w){return w.k===s.k;});if(!ws.length)return;
+        var ws=wis.filter(function(w){return w.k===s.k;}).concat(Object.keys(cqz).filter(function(id){return cqz[id]===s.k&&pk[id];}).map(function(id){return vlCqAlsWi(pk[id],nameById);}));
+        if(!ws.length)return;
         ws.forEach(function(w){dabei(w.ma);});
         sch[s.k]={mitarbeiter:ws.map(function(w){return w.ma;}),status:vlSchrittStatus(ws),
           start:ws.reduce(function(m,w){return w.start&&(!m||w.start<m)?w.start:m;},""),
@@ -6731,6 +6771,13 @@ function Planungstool(){
   // der eingeblendeten Liste und loest die V-Workitems danach wieder heraus.
   var s_vlauf=useState(vlLaden);var vlauf=s_vlauf[0],setVlauf=s_vlauf[1];
   var s_vlWahl=useState(null);var vlWahl=s_vlWahl[0],setVlWahl=s_vlWahl[1];
+  // v3.4.0: im Flow ausgeblendete Auftraege (faelschlich in der Liste). Sie fehlen
+  // auch in der Lesekopie fuer Kontor und Anforderungsbuch.
+  var s_flowAus=useState(function(){var v=lsLoad("ptool_flow_aus",{});return v&&typeof v==="object"&&!Array.isArray(v)?v:{};});
+  var flowAus=s_flowAus[0],setFlowAus=s_flowAus[1];
+  var s_flowZeigeAus=useState(false);var flowZeigeAus=s_flowZeigeAus[0],setFlowZeigeAus=s_flowZeigeAus[1];
+  useEffect(function(){try{localStorage.setItem("ptool_flow_aus",JSON.stringify(flowAus));}catch(e){}},[flowAus]);
+  function flowAusSchalten(id){setFlowAus(function(p){var n=Object.assign({},p);if(n[id])delete n[id];else n[id]=1;return n;});}
   var s_vlAktiv=useState(function(){var a=WBAblage.aktiv();return (a&&a.id)||"";});var vlAktivId=s_vlAktiv[0],setVlAktivId=s_vlAktiv[1];
   var s_vlAblage=useState(0);var setVlAblageNr=s_vlAblage[1];
   useEffect(function(){
@@ -7538,10 +7585,12 @@ function Planungstool(){
     var t=setTimeout(function(){
       var an=vlAngemeldet.current;
       if(!an){try{var alt=JSON.parse(localStorage.getItem(VL_LESEKOPIE)||"null");an=(alt&&alt.angemeldet)||"";}catch(e){}}
-      try{localStorage.setItem(VL_LESEKOPIE,JSON.stringify(vlLesekopie(vlauf,issueIdxRaw,releases,employees,an)));}catch(e){}
+      var lk=vlLesekopie(vlauf,issueIdxRaw,releases,employees,an);
+      lk.auftraege=lk.auftraege.filter(function(x){return !flowAus[x.id];}); // v3.4.0
+      try{localStorage.setItem(VL_LESEKOPIE,JSON.stringify(lk));}catch(e){}
     },400);
     return function(){clearTimeout(t);};
-  },[vlauf,issueIdxRaw,releases,employees,selfEmp]);
+  },[vlauf,issueIdxRaw,releases,employees,selfEmp,flowAus]);
   // v2.75.1: NUR die erweiterte Ansicht oeffnet fremde Daten. Ohne erkannten
   // Mitarbeiter bleibt die personenbezogene Sicht leer -- vorher war sie
   // vollstaendig, was den Schutz mit einem Klick aushebelte.
@@ -7559,7 +7608,7 @@ function Planungstool(){
   // wie die echten Daten -- Abwesenheiten und Wochenarbeitszeit -- damit jede
   // Kapazitaetsrechnung sie ohne Sonderweg beruecksichtigt.
   var activeScen=useMemo(function(){
-    if(!scenActive)return null;
+    if(!scenActive||SZENARIEN_AUS)return null;
     return (scenarios||[]).filter(function(x){return x.id===scenActive;})[0]||null;
   },[scenarios,scenActive]);
 
@@ -14287,11 +14336,18 @@ function Planungstool(){
   function vlWisVon(a,k){return Object.keys(a.wis||{}).map(function(id){return a.wis[id];}).filter(function(w){return !k||w.k===k;});}
   // Schrittaufwand = Auftragsaufwand x Anteil, gleich auf die offenen,
   // nicht von Hand geschaetzten Workitems des Schritts verteilt (min. 1 h).
+  // v3.4.0: dem Schritt zugeordnete ClearQuest-Workitems (Pakete aus dem Import)
+  function vlCqVon(a,k){
+    var z=(a&&a.cq)||{},nb={};employees.forEach(function(e){nb[e.id]=e.name;});
+    return Object.keys(z).filter(function(id){return !k||z[id]===k;}).map(function(id){
+      var p=allPkgs.find(function(x){return x.id===id&&!x._v;});return p?Object.assign(vlCqAlsWi(p,nb),{k:z[id]}):null;}).filter(Boolean);
+  }
   function vlVerteilen(n,a,k){
     var ws=vlWisVon(a,k).filter(function(w){return w.lcs!=="closed"&&!w.hFix;});
     if(!ws.length)return;
     var soll=(Number(a.aufwand)||0)*(Number(n.anteile[k])||0)/100;
-    var fest=vlWisVon(a,k).filter(function(w){return w.lcs==="closed"||w.hFix;}).reduce(function(s,w){return s+(Number(w.h)||0);},0);
+    var fest=vlWisVon(a,k).filter(function(w){return w.lcs==="closed"||w.hFix;}).reduce(function(s,w){return s+(Number(w.h)||0);},0)
+      +vlCqVon(a,k).reduce(function(s,w){return s+w.h;},0); // ClearQuest-Aufwand zaehlt vorab
     var h=Math.max(1,Math.round(Math.max(0,soll-fest)/ws.length*2)/2);
     ws.forEach(function(w){var weg=Math.max(0,(Number(w.h)||0)-(w.rest!=null?Number(w.rest):Number(w.h)||0));w.h=h;w.rest=Math.max(0,h-weg);});
   }
@@ -14302,9 +14358,9 @@ function Planungstool(){
     var a=n.auftraege[iid];if(!a)return;
     var prev=[];
     VL_SCHRITTE.forEach(function(s){
-      var ws=vlWisVon(a,s.k);if(!ws.length)return;
+      var ws=vlWisVon(a,s.k),cq=vlCqVon(a,s.k);if(!ws.length&&!cq.length)return;
       ws.forEach(function(w){w.deps=prev.slice();});
-      prev=ws.map(function(w){return w.id;});
+      prev=ws.map(function(w){return w.id;}).concat(cq.map(function(w){return w.id;}));
     });
     var heute=dateStr(new Date());
     var offen=vlWisVon(a).filter(function(w){return w.lcs!=="closed"&&(alle||!w.fix||!w.start);});
@@ -14326,7 +14382,7 @@ function Planungstool(){
         vlWisVon(a,von).forEach(function(w){if(w.ma===ma&&w.lcs!=="closed")delete a.wis[w.id];});
         vlVerteilen(n,a,von);
       }
-      if(k&&!vlWisVon(a,k).some(function(w){return w.ma===ma;})){
+      if(k&&!vlWisVon(a,k).some(function(w){return w.ma===ma;})&&!vlCqVon(a,k).some(function(w){return w.ma===ma;})){
         var s=VL_SCHRITTE.find(function(x){return x.k===k;}),id=vlWid(n,iid,k,ma);
         a.wis[id]={id:id,iid:iid,k:k,ma:ma,titel:k+" "+s.n+" · "+titel,h:0,rest:0,start:"",end:"",deps:[],lcs:"new"};
       }
@@ -14334,6 +14390,24 @@ function Planungstool(){
       vlPlanenIn(n,iid,false);
     });
     setVlWahl(null);
+  }
+  // v3.4.0 (Maik): vorhandene ClearQuest-Workitems des Issues einem Schritt
+  // zuordnen. Sie ersetzen die im Werkzeug angelegten Workitems desselben
+  // Bearbeiters in diesem Schritt; ihre Termine bleiben unangetastet.
+  function vlCqZuordnen(iid,wid,k){
+    vlAendern(function(n){
+      var a=vlAnlegen(n,iid);if(!a.cq)a.cq={};
+      var alt=a.cq[wid];
+      if(!k)delete a.cq[wid];else a.cq[wid]=k;
+      if(k){
+        var cw=vlCqVon(a,k).find(function(w){return w.id===wid;});
+        vlWisVon(a,k).forEach(function(w){if(w.lcs!=="closed"&&cw&&(w.ma===cw.ma||!cw.ma))delete a.wis[w.id];});
+        Object.keys(a.wis).forEach(function(id){var w=a.wis[id];w.deps=(w.deps||[]).filter(function(d){return a.wis[d]||a.cq[d];});});
+        vlVerteilen(n,a,k);
+      }
+      if(alt&&alt!==k)vlVerteilen(n,a,alt);
+      vlPlanenIn(n,iid,false);
+    });
   }
   function vlWi(iid,id,fn){
     vlAendern(function(n){var a=n.auftraege[iid],w=a&&a.wis[id];if(!w)return;fn(w,a,n);});
@@ -14395,6 +14469,8 @@ function Planungstool(){
     var darf=!!canSeeAll;
     var wahl=vlWahl&&vlWahl.iid===iid?vlWahl:null;
     var erg=vlErgebnisse(iid); // v3.2.0
+    var cqAlle=(x.wis||[]).filter(function(id){return !(a&&a.wis&&a.wis[id]);}).map(function(id){return allPkgs.find(function(p){return p.id===id&&!p._v;});}).filter(Boolean);
+    var cqZu=vlCqVon(a,null);
     var statusFarbe={"":A.border,"new":A.borderMid,"started":A.sky,"blocked":A.coral,"closed":A.green};
     var statusText={"":"",new:"offen",started:"in Arbeit",blocked:"blockiert",closed:"erledigt"};
     var klein={fontSize:"var(--fs-2xs)",color:A.textLight};
@@ -14419,7 +14495,7 @@ function Planungstool(){
       React.createElement("svg",{viewBox:"0 0 100 194",preserveAspectRatio:"none",style:{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}},
         React.createElement("polyline",{points:linie,fill:"none",stroke:A.borderMid,strokeWidth:1.5,vectorEffect:"non-scaling-stroke",strokeDasharray:"4 3"})),
       VL_SCHRITTE.map(function(s){
-        var l=VL_LAGE[s.k],ws=wis.filter(function(w){return w.k===s.k;}),st=vlSchrittStatus(ws);
+        var l=VL_LAGE[s.k],ws=wis.filter(function(w){return w.k===s.k;}),cs=cqZu.filter(function(w){return w.k===s.k;}),st=vlSchrittStatus(ws.concat(cs));
         var ziel=!!wahl&&darf;
         return React.createElement("div",Object.assign({key:s.k,"data-vl-step":s.k,
           title:s.k+" · "+s.n+" ("+s.w+")"+(st?"\nStatus: "+statusText[st]:"")+(darf?"\nMitarbeiter hierher ziehen":""),
@@ -14430,11 +14506,15 @@ function Planungstool(){
             React.createElement("b",{style:{fontSize:"var(--fs-2xs)",color:A.text,whiteSpace:"nowrap"}},s.k==="EIN"||s.k==="ABS"?s.n:s.k),
             React.createElement("span",{style:Object.assign({},klein,{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"})},s.k==="EIN"||s.k==="ABS"?"":s.n)),
           React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:3,minHeight:20}},
-            ws.length?ws.map(function(w){
+            (ws.length||cs.length)?ws.map(function(w){
               return vlAvatar(w.ma,20,{key:w.id,blass:w.lcs==="closed",an:wahl&&wahl.ma===w.ma&&wahl.von===s.k,drag:darf&&w.lcs!=="closed",
                 title:vlName(w.ma)+" · "+(w.h||0)+" h · "+(statusText[w.lcs]||w.lcs)+(w.start?"\n"+w.start+" → "+w.end:""),
                 attr:w.lcs==="closed"?{}:ziehbar(w.ma,s.k)});
-            }):React.createElement("span",{style:klein},"—")),
+            }).concat(cs.map(function(w){
+              return React.createElement("span",{key:"cq-"+w.id,"data-vl-cq-chip":w.id,style:{position:"relative",display:"inline-flex"}},
+                vlAvatar(w.ma||"?",20,{blass:w.lcs==="closed",title:"ClearQuest "+w.id+" \u00b7 "+w.titel+"\n"+vlName(w.ma)+" \u00b7 "+(statusText[w.lcs]||w.lcs)+(w.start?"\n"+w.start+" \u2192 "+w.end:"")}),
+                React.createElement("i",{style:{position:"absolute",right:-3,bottom:-3,fontStyle:"normal",fontSize:7,fontWeight:800,background:A.text,color:A.surface,borderRadius:3,padding:"0 2px",lineHeight:"9px"}},"CQ"));
+            })):React.createElement("span",{style:klein},"—")),
           erg[s.k]?React.createElement("span",{"data-vl-erg":s.k,title:erg[s.k]+" \u2014 R\u00fcckmeldung aus "+s.w,style:Object.assign({},klein,{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",color:A.textMid})},erg[s.k]):null)
       }));
     // ── Mitarbeiter-Leiste ──
@@ -14518,6 +14598,22 @@ function Planungstool(){
         React.createElement("button",{type:"button",disabled:!wis.length,style:Object.assign({},knopf,{opacity:wis.length?1:0.5}),
           title:"Alle offenen Workitems neu einplanen — überschreibt auch die Detailplanung.",
           onClick:function(){vlAendern(function(n){vlPlanenIn(n,iid,true);});}},"Alles neu planen")));
+    // ── v3.4.0: vorhandene ClearQuest-Workitems des Issues ──
+    var cqTabelle=cqAlle.length?React.createElement("div",{"data-vl-cq":iid,style:{marginTop:10}},
+      React.createElement("div",{style:Object.assign({},klein,{fontWeight:700,marginBottom:4})},"Workitems aus ClearQuest \u00b7 einem Prozessschritt zuordnen (ersetzt die hier angelegten desselben Bearbeiters)"),
+      React.createElement("table",{style:{borderCollapse:"collapse",minWidth:760}},
+        React.createElement("thead",null,React.createElement("tr",null,th("Workitem"),th("Titel"),th("Bearbeiter"),th("Rest"),th("Start"),th("Plandatum"),th("Status"),th("Schritt"))),
+        React.createElement("tbody",null,cqAlle.map(function(p){
+          var em=employees.find(function(e){return e.id===p.employee;}),zu=(a&&a.cq&&a.cq[p.id])||"",lc=vlCqLcs(p.lcs);
+          return React.createElement("tr",{key:p.id,"data-vl-cq-wi":p.id},
+            td(React.createElement("span",{style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-2xs)"}},p.id)),
+            td(React.createElement("span",{title:p.title,style:{display:"inline-block",maxWidth:260,overflow:"hidden",textOverflow:"ellipsis",verticalAlign:"bottom"}},p.title||"\u2013")),
+            td(em?React.createElement("span",{style:{display:"inline-flex",gap:5,alignItems:"center"}},vlAvatar(em.name,18,{}),vlName(em.name)):"\u2013"),
+            td((p.remainingHours!=null?p.remainingHours:p.hours||0)+" h"),td(p.start||"\u2013"),td(p.end||"\u2013"),td(statusText[lc]||lc),
+            td(React.createElement("select",{value:zu,"data-vl-cq-schritt":p.id,disabled:!darf,
+              onChange:function(e){vlCqZuordnen(iid,p.id,e.target.value);},style:eingabe},
+              [React.createElement("option",{key:"",value:""},"\u2013")].concat(VL_SCHRITTE.map(function(s){return React.createElement("option",{key:s.k,value:s.k},s.k==="EIN"||s.k==="ABS"?s.n:s.k+" \u00b7 "+s.n);})))));
+        })))):null;
     // ── L1 und Anteile ──
     var l1=React.createElement("details",{style:{marginTop:8}},
       React.createElement("summary",{style:Object.assign({},klein,{cursor:"pointer",fontWeight:700})},"L1 · Kundenanforderung (Beschreibung des Issues)"),
@@ -14545,7 +14641,7 @@ function Planungstool(){
         React.createElement("span",{style:klein},WBAblage.kann?"Netzlaufwerk oder per OneDrive synchronisierter SharePoint-Ordner. Der Link bildet den Ordner-Link je Auftrag.":"Ordner anlegen geht in Chrome und Edge. Hier gibt es das Ger\u00fcst als ZIP.")));
     return React.createElement("div",{"data-vl-panel":iid,onClick:function(e){e.stopPropagation();},
       style:{position:"sticky",left:0,width:1000,boxSizing:"border-box",padding:"10px 14px 12px 34px"}},
-      kopf,leiste,vFeld,tabelle,l1,anteile,ablage);
+      kopf,leiste,vFeld,tabelle,cqTabelle,l1,anteile,ablage);
   }
 
   function FlowView(){
@@ -14705,8 +14801,8 @@ function Planungstool(){
           missing:missing,
           pver:iss.pver,pvName:iss.pvName,
         };
-      }).reduce(expandPver,[]);
-    },[issueIdx,allPkgs,releases,employees,capEndMap,canSeeAll,selfEmp,flowWunsch]);
+      }).reduce(expandPver,[]).filter(function(r){return flowZeigeAus||!flowAus[r.id];}); // v3.4.0
+    },[issueIdx,allPkgs,releases,employees,capEndMap,canSeeAll,selfEmp,flowWunsch,flowAus,flowZeigeAus]);
 
     // ── v2.96.0: PVER-Issues -> je Workitem eine Zeile (Entscheidung Maik) ──
     // Ein Issue, dessen gemapptes Release ein PVER ist, ist nur der Rahmen;
@@ -15449,7 +15545,7 @@ function Planungstool(){
       var rowBg=solidTint(laneCol,0.13);
       return [
         React.createElement("tr",{key:"r-"+iss.id,
-          style:{borderBottom:"1px solid "+A.border,cursor:"pointer",background:rowBg},
+          style:{borderBottom:"1px solid "+A.border,cursor:"pointer",background:rowBg,opacity:flowAus[iss.id]?0.45:1},
           onClick:function(e){
             if(e.target.dataset&&e.target.dataset.exp)return;
             if(iss.wis&&iss.wis.length){setEditPkg(iss.wis[0]);setModal("editPkg");}
@@ -15472,7 +15568,10 @@ function Planungstool(){
                 style:{fontWeight:iss.isWi?600:700,fontSize:"var(--fs-md)",color:A.text,
                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0,flex:1}},(iss.isWi?"\u2699 ":"")+iss.title),
               React.createElement(CopyID,{id:iss.id,label:iss.id,style:{fontSize:"var(--fs-2xs)",flexShrink:0}}),
-              BlockerIcon(iss)
+              BlockerIcon(iss),
+              React.createElement("button",{"data-exp":"1","data-flow-aus":iss.id,title:flowAus[iss.id]?"Wieder einblenden":"Auftrag ausblenden (geh\u00f6rt nicht in die Liste)",
+                onClick:function(e){e.stopPropagation();flowAusSchalten(iss.id);},
+                style:{background:"none",border:"none",cursor:"pointer",color:flowAus[iss.id]?A.mint:A.textLight,padding:0,flexShrink:0,fontSize:"var(--fs-xs)",opacity:flowAus[iss.id]?1:0.55}},flowAus[iss.id]?"\u21ba":"\u2715")
             )
           ):
           React.createElement("td",{style:{
@@ -15640,6 +15739,12 @@ function Planungstool(){
                 color:on?A.mint:A.textMid,fontWeight:on?700:400}},o.l);
           })
         ),
+        // v3.4.0: ausgeblendete Auftraege zeigen
+        Object.keys(flowAus).length?React.createElement("button",{"data-flow-zeige-aus":flowZeigeAus?"1":"0",onClick:function(){setFlowZeigeAus(function(v){return !v;});},
+          title:"Ausgeblendete Auftr\u00e4ge "+(flowZeigeAus?"wieder verbergen":"anzeigen (blass, mit \u21ba einblenden)"),
+          style:{padding:"5px 10px",borderRadius:"var(--r-sm)",cursor:"pointer",fontSize:"var(--fs-sm)",
+            border:"1px solid "+(flowZeigeAus?A.mint:A.border),background:flowZeigeAus?A.mintLight:"transparent",color:flowZeigeAus?A.mint:A.textMid}},
+          "\u2715 "+Object.keys(flowAus).length+" ausgeblendet"):null,
         // v2.95.0: Kompakt / Ausfuehrlich
         React.createElement("button",{"data-flow-compact":compact?"1":"0",onClick:toggleCompact,
           title:compact?"Ausf\u00fchrliche Zeilen (Kennung, Abst\u00e4nde, Hinweise in eigener Zeile)":"Eine Zeile je Issue",
