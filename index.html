@@ -2555,8 +2555,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.18.1";
+var APP_VERSION="3.19.0";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.19.0: Navigation gebuendelt (Design-Check Massnahme 5): "Handlungsbedarf" = Umplanung + Konflikte, "Auslastung" = heute + Prognose (Forecast); je ein Umschalter ueber dem Inhalt. Ansichtsschluessel bleiben.
 // v3.18.1: "Plan vs. Ist" heisst "Planungsstand vs. heute" (Terminvergleich gegen gesicherten Stand); Link zur Auswertung "Aufwand geplant vs. gebucht".
 // v3.18.0: Zuordnung nur noch im V (Design-Check Massnahme 5, Entscheidung 1a): ClearQuest-Workitems als Chips ziehen oder antippen, dann Schritt antippen; im V verschiebbar, auf "entfernen" geloest. Die Tabelle zeigt den Schritt nur noch an.
 // v3.17.3: Bedienelemente im Flow benannt (Schritt-Auswahl, Aufwand, Ordner).
@@ -11685,6 +11686,8 @@ function Planungstool(){
 
   // v2.70.0: Die Navigationsgruppen werden an zwei Stellen gebraucht --
   // ausgeklappt als Liste, eingeklappt als Symbolleiste. Eine Quelle.
+  // v3.19.0: gebuendelte Ansichten -- Navigationseintrag bleibt markiert
+  function navAkt(k){return k===view||(k==="umplanung"&&view==="konflikte")||(k==="auslastung"&&view==="forecast");}
   function navGroupsFor(){
   return [
                 {title:"",items:[{key:"dashboard",label:"\uD83C\uDFE0 Dashboard"}]},
@@ -11692,13 +11695,11 @@ function Planungstool(){
                   {key:"auslastung",label:"\uD83D\uDCCA Auslastung"},
                   {key:"bcplanung",label:"\uD83D\uDCC5 BC-Planung"},
                   {key:"szenarien",label:"\uD83D\uDD2D Szenarien",badge:(scenarios||[]).length||null},
-                  {key:"umplanung",label:"\uD83D\uDD04 Umplanung",badge:replanCount>0?replanCount:null},
-                  {key:"konflikte",label:"\u26A1 Konflikte",badge:conflictChains.length>0?conflictChains.length:null},
+                  {key:"umplanung",label:"\uD83D\uDD04 Handlungsbedarf",badge:(replanCount+conflictChains.length)>0?(replanCount+conflictChains.length):null},
                   {key:"flow",label:"\uD83D\uDD00 Flow"},
                   {key:"sprints",label:"\uD83C\uDFC3 Sprints",badge:sprMeld.length||null}
                 ]},
                 {title:"Auswertung",items:[
-                  {key:"forecast",label:"\uD83D\uDCC8 Forecast"},
                   {key:"report",label:"\uD83D\uDCC4 Bericht"}
                 ]},
                 {title:"Team & Zeit",items:[
@@ -17608,7 +17609,7 @@ function Planungstool(){
                 style:{width:6,height:6,borderRadius:"var(--r-xs)",transform:"rotate(45deg)",background:A.borderMid,margin:"5px 0",position:"relative"}}));
               g.items.forEach(function(it){
                 var name=navName(it.label);
-                var act=view===it.key;
+                var act=navAkt(it.key);
                 out.push(React.createElement("button",{key:it.key,"data-rail-view":it.key,
                   className:"wb-rail-btn"+(act?" on":""),
                   onClick:function(){setView(it.key);},title:name,"aria-label":name,
@@ -17652,7 +17653,7 @@ function Planungstool(){
                   // v2.92.0: Eintrag ohne Kasten; die aktive Ansicht traegt die Raute
                   // auf dem Faden. Auf dem iPhone schliesst die Wahl die Schublade.
                   return React.createElement("button",{key:item.key,"data-nav-view":item.key,
-                    className:"wb-item"+(view===item.key?" on":""),"aria-current":view===item.key?"page":null,
+                    className:"wb-item"+(navAkt(item.key)?" on":""),"aria-current":navAkt(item.key)?"page":null,
                     onClick:function(){setView(item.key);try{if(window.innerWidth<768)setSideOpen(false);}catch(e){}}},
                     React.createElement("span",{className:"wb-ico"},React.createElement(NavIcon,{name:item.key,size:17})),
                     navName(item.label),
@@ -17730,9 +17731,9 @@ function Planungstool(){
                   return React.createElement("button",{key:it.key,"data-more-view":it.key,
                     onClick:function(){setView(it.key);setMoreOpen(false);},
                     style:{width:"100%",padding:"7px 10px",borderRadius:"var(--r-md)",cursor:"pointer",fontSize:"var(--fs-sm)",
-                      fontWeight:view===it.key?700:500,textAlign:"left",border:"none",
-                      background:view===it.key?A.mintLight:"transparent",
-                      color:view===it.key?A.mint:A.textMid}},it.label);
+                      fontWeight:navAkt(it.key)?700:500,textAlign:"left",border:"none",
+                      background:navAkt(it.key)?A.mintLight:"transparent",
+                      color:navAkt(it.key)?A.mint:A.textMid}},it.label);
                 }),
                 React.createElement("button",{"data-more-fx":"1",onClick:toggleFx,
                   title:"Glas und Hintergrundflaechen an- oder abschalten",
@@ -17766,9 +17767,9 @@ function Planungstool(){
           var all=navGroupsFor().reduce(function(a,g){return a.concat(g.items);},[]);
           var byKey={};all.forEach(function(it){byKey[it.key]=it;});
           var items=DOCK_VIEWS.filter(function(k){return byKey[k];}).map(function(k){return byKey[k];});
-          var inDock=items.some(function(it){return it.key===view;});
+          var inDock=items.some(function(it){return navAkt(it.key);});
           return items.map(function(it){
-            var on=view===it.key;
+            var on=navAkt(it.key);
             return React.createElement("button",{key:it.key,"data-dock-view":it.key,
               className:"wb-dock-btn"+(on?" on":""),"aria-label":navName(it.label),"aria-current":on?"page":null,
               onClick:function(){setView(it.key);try{if(window.innerWidth<768)setSideOpen(false);}catch(e){}}},
@@ -18086,6 +18087,18 @@ function Planungstool(){
         React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0,minHeight:0}},
 
           KP_VARIANTE==="zeit"?null:React.createElement("div",{id:"wbm-ziel",key:"wbm",style:{flexShrink:0}}),
+          // v3.19.0: Umschalter der gebuendelten Ansichten
+          (function(){
+            var paar=(view==="umplanung"||view==="konflikte")?[["umplanung","Umplanung",replanCount],["konflikte","Konflikte",conflictChains.length]]
+              :(view==="auslastung"||view==="forecast")?[["auslastung","Heute",0],["forecast","Prognose",0]]:null;
+            if(!paar)return null;
+            paar=paar.filter(function(x){return viewAllowed(x[0]);});if(paar.length<2)return null;
+            return React.createElement("div",{key:"paar","data-nav-paar":paar[0][0],role:"tablist",style:{display:"flex",gap:0,margin:"0 16px 8px",flexShrink:0,alignSelf:"flex-start",border:"1px solid "+A.border,borderRadius:"var(--r-md)",overflow:"hidden"}},
+              paar.map(function(x){var an=view===x[0];
+                return React.createElement("button",{key:x[0],type:"button",role:"tab","aria-selected":an,"data-paar-tab":x[0],onClick:function(){setView(x[0]);},
+                  style:{padding:"5px 14px",border:"none",background:an?A.mint:A.surface,color:an?A.onMint:A.text,fontWeight:700,fontSize:"var(--fs-sm)",cursor:"pointer",display:"inline-flex",gap:6,alignItems:"center"}},
+                  x[1],x[2]?React.createElement("span",{style:{background:an?A.surface:A.coral,color:an?A.mint:"#fff",borderRadius:999,padding:"0 6px",fontSize:"var(--fs-2xs)"}},String(x[2])):null);}));
+          })(),
           React.createElement("div",{id:"main-scroll",style:{flex:1,overflowX:"auto",overflowY:"auto"}},
           view==="report"?React.createElement(ViewHost,{key:"vh-ReportView-"+(canSeeAll?1:0),render:ReportView}):view==="forecast"?React.createElement(ViewHost,{key:"vh-ForecastView-"+(canSeeAll?1:0),render:ForecastView}):view==="sprints"?React.createElement(ViewHost,{key:"vh-SprintsView",render:SprintsView}):view==="szenarien"?React.createElement(ViewHost,{key:"vh-SzenarienView",render:SzenarienView}):view==="planist"?React.createElement(ViewHost,{key:"vh-PlanIstView",render:PlanIstView}):
           view==="dashboard"?React.createElement(ViewHost,{key:"vh-DashboardView",render:DashboardView}):view==="zeit"?React.createElement(ViewHost,{key:"vh-ZeitView",render:ZeitView}):view==="mitarbeiter"?React.createElement(ViewHost,{key:"vh-MitarbeiterView",render:MitarbeiterView}):view==="flow"?React.createElement(ViewHost,{key:"vh-FlowView",render:FlowView}):view==="bcplanung"?React.createElement(ViewHost,{key:"vh-BCPlanungView",render:BCPlanungView}):view==="rohdaten"?React.createElement(RohdatenView,{data:rawData,A:A}):view==="anforderungen"?React.createElement(ViewHost,{key:"vh-AnforderungenView",render:AnforderungenView}):view==="testfaelle"?React.createElement(ViewHost,{key:"vh-TestfaelleView",render:TestfaelleView}):view==="architektur"?React.createElement(ViewHost,{key:"vh-ArchitekturView",render:ArchitekturView}):view==="umplanung"?React.createElement(ViewHost,{key:"vh-UmplanungView",render:UmplanungView}):view==="konflikte"?React.createElement(ViewHost,{key:"vh-KonfliktView",render:KonfliktView}):React.createElement("div",{ref:ganttRef,style:{width:LW+tw,minWidth:LW+tw,position:"relative"}},
