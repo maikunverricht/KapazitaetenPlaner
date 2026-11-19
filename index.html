@@ -2551,8 +2551,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.6.1";
+var APP_VERSION="3.7.0";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.7.0: Sprints je Team -- gemeinsamer Takt fuer alle Teams; Team = Abteilung, im Sprint-Reiter anpassbar (mitglied). Liste, Karten, Kapazitaet und Meldungen gelten fuer das gewaehlte Team; Lesekopie mit Team und teams[].
 // v3.6.0: Sprints -- Team-Sprints mit festen Zeiten, Workitems nach Dringlichkeit in Sprints einplanen (auch ueber mehrere Sprints); Workitems im Sprintzeitraum ausserhalb des Sprints melden sich in der Umplanung. Lesekopie wb-kapazitaetenplaner-sprint fuer das Kontor-Widget.
 // v3.5.1: Review-Anteil im Schritt einstellbar (vlauf.review, Standard 20 %).
 // v3.5.0: Rolle Review je Prozessschritt (zweite Ablage im kleinen V, Review-Workitems aus ClearQuest am Titel erkannt); Lesekopie mit entwickler/reviewer je Schritt.
@@ -4726,11 +4727,15 @@ function vlWid(vl,iid,k,name){
    ptool_sprints = {start:"JJJJ-MM-TT", wochen:2, ende:{nr:"JJJJ-MM-TT"}, zu:{pkgId:{nr:h}}}
    Sprint n beginnt am Tag nach dem Ende von n-1; "ende" verschiebt nur diesen Sprint. */
 var SPR_KEY="ptool_sprints";
-function sprLeer(){return {start:"",wochen:2,ende:{},zu:{}};}
+function sprLeer(){return {start:"",wochen:2,ende:{},zu:{},team:"",mitglied:{}};}
 function sprLaden(){var v=null;try{v=JSON.parse(localStorage.getItem(SPR_KEY)||"null");}catch(e){}
   if(!v||typeof v!=="object"||Array.isArray(v))return sprLeer();
   return {start:typeof v.start==="string"?v.start:"",wochen:Math.max(1,Math.min(6,Number(v.wochen)||2)),
-    ende:v.ende&&typeof v.ende==="object"?v.ende:{},zu:v.zu&&typeof v.zu==="object"?v.zu:{}};}
+    ende:v.ende&&typeof v.ende==="object"?v.ende:{},zu:v.zu&&typeof v.zu==="object"?v.zu:{},
+    team:typeof v.team==="string"?v.team:"",mitglied:v.mitglied&&typeof v.mitglied==="object"&&!Array.isArray(v.mitglied)?v.mitglied:{}};}
+/* v3.7.0: Team eines Mitarbeiters -- eigene Zuordnung vor Abteilung */
+function sprTeamVon(cfg,emp){if(!emp)return "";var m=cfg&&cfg.mitglied&&cfg.mitglied[emp.id];return m||emp.department||"Ohne Abteilung";}
+function sprTeams(cfg,emps){var t={};(emps||[]).forEach(function(e){t[sprTeamVon(cfg,e)]=true;});return Object.keys(t).sort(function(a,b){return a.localeCompare(b,"de");});}
 function sprTag(iso,n){var d=new Date(iso+"T00:00:00");d.setDate(d.getDate()+n);return dateStr(d);}
 function sprListe(cfg,bis){
   var out=[];if(!cfg||!/^\d{4}-\d{2}-\d{2}$/.test(cfg.start||""))return out;
@@ -4747,16 +4752,22 @@ function sprDringlich(a,b,heute){
   var sa=a.lcs==="started"?0:1,sb=b.lcs==="started"?0:1;if(sa!==sb)return sa-sb;
   return String(a.end||"9999").localeCompare(String(b.end||"9999"));}
 /* Meldungen: im Zeitraum eines verplanten Sprints geplant, aber nicht im Sprint -- oder im Sprint, endet aber danach */
-function sprMeldungen(cfg,pkgs,analysis,heute){
-  var L=sprListe(cfg,heute),zu=cfg.zu||{},geplant={};
-  Object.keys(zu).forEach(function(id){Object.keys(zu[id]||{}).forEach(function(nr){geplant[nr]=true;});});
-  var S=L.filter(function(x){return geplant[x.nr]&&x.ende>=heute;});if(!S.length)return [];
+function sprMeldungen(cfg,pkgs,analysis,heute,emps){
+  var L=sprListe(cfg,heute),zu=cfg.zu||{},geplant={},teamOf={},pk={};
+  (emps||[]).forEach(function(e){teamOf[e.id]=sprTeamVon(cfg,e);});
+  var tm=function(p){return teamOf[p&&p.employee]||"";};
+  (pkgs||[]).forEach(function(p){if(p)pk[p.id]=p;});
+  /* ein Sprint gilt als verplant, sobald das Team des Workitems darin etwas eingeplant hat */
+  Object.keys(zu).forEach(function(id){var t=tm(pk[id]);Object.keys(zu[id]||{}).forEach(function(nr){geplant[t+"\u0001"+nr]=true;});});
+  var S=L.filter(function(x){return x.ende>=heute;});if(!S.length||!Object.keys(geplant).length)return [];
   var plan={};(analysis||[]).forEach(function(r){if(r&&r.pkg)plan[r.pkg.id]={s:r.planStart||r.pkg.start,e:r.capEnd||r.pkg.end};});
   var out=[];
   (pkgs||[]).forEach(function(p){if(!p||p.lcs==="closed")return;
     var w=plan[p.id]||{s:p.start,e:p.end},z=zu[p.id]||{};if(!w.s&&!w.e)return;
     var s0=w.s||w.e,e0=w.e||w.s;
+    var t=tm(p);
     S.forEach(function(x){
+      if(!geplant[t+"\u0001"+x.nr])return;
       var drin=z[x.nr]!=null,ueberl=s0<=x.ende&&e0>=x.start;
       if(!drin&&ueberl)out.push({p:p,sprint:x,grund:"im Zeitraum von Sprint "+x.nr+" geplant, aber nicht eingeplant",start:s0,ende:e0});
       if(drin&&e0>x.ende&&!Object.keys(z).some(function(n){return Number(n)>x.nr;}))out.push({p:p,sprint:x,grund:"in Sprint "+x.nr+", geplant bis "+e0+" \u2013 nach Sprintende",start:s0,ende:e0});
@@ -8171,7 +8182,7 @@ function Planungstool(){
     setImpOpen(false);setBriefOpen(false);
     setEditPkg(impFind(id));setModal("editPkg");
   }
-  var sprMeld=useMemo(function(){return sprMeldungen(sprCfg,allPkgs,analysis,dateStr(new Date()));},[sprCfg,allPkgs,analysis]);
+  var sprMeld=useMemo(function(){return sprMeldungen(sprCfg,allPkgs,analysis,dateStr(new Date()),employees);},[sprCfg,allPkgs,analysis,employees]);
   var replanCount=analysis.filter(function(r){return r.status==="replan";}).length+sprMeld.length;
   // v3.6.0: Lesekopie fuer das Sprint-Widget im Kontor
   useEffect(function(){
@@ -8179,16 +8190,24 @@ function Planungstool(){
       var heute=dateStr(new Date()),L=sprListe(sprCfg,sprTag(heute,60));
       var akt=L.find(function(x){return x.start<=heute&&heute<=x.ende;})||L.find(function(x){return x.start>heute;});
       if(!akt){localStorage.removeItem("wb-kapazitaetenplaner-sprint");return;}
-      var ids=Object.keys(sprCfg.zu||{}).filter(function(id){return sprCfg.zu[id]&&sprCfg.zu[id][akt.nr]!=null;});
-      var offen=ids.filter(function(id){return !!pkgById[id];});
-      var geplant=ids.reduce(function(s,id){return s+(Number(sprCfg.zu[id][akt.nr])||0);},0);
-      var emps=employees.filter(function(e){return !hiddenEmp[e.name];});
-      var kap=emps.reduce(function(s,e){return s+sprKap(e,absenceMap,akt.start,akt.ende);},0);
-      var ueber=emps.filter(function(e){var h=offen.filter(function(id){return pkgById[id].employee===e.id;}).reduce(function(s,id){return s+(Number(sprCfg.zu[id][akt.nr])||0);},0);
-        return h>sprKap(e,absenceMap,akt.start,akt.ende);}).length;
-      localStorage.setItem("wb-kapazitaetenplaner-sprint",JSON.stringify({quelle:"kapazitaetenplaner",version:APP_VERSION,updated:new Date().toISOString(),heute:heute,
-        sprint:akt,laeuft:akt.start<=heute,n:ids.length,offen:offen.length,erledigt:ids.length-offen.length,geplant:Math.round(geplant*10)/10,kap:Math.round(kap*10)/10,
-        ueber:ueber,melden:sprMeld.filter(function(m){return m.sprint.nr===akt.nr;}).length}));
+      var r1=function(v){return Math.round(v*10)/10;};
+      var alle=employees.filter(function(e){return !hiddenEmp[e.name];}),teamOf={};alle.forEach(function(e){teamOf[e.id]=sprTeamVon(sprCfg,e);});
+      var allIds=Object.keys(sprCfg.zu||{}).filter(function(id){return sprCfg.zu[id]&&sprCfg.zu[id][akt.nr]!=null;});
+      function je(team){
+        var emps=alle.filter(function(e){return teamOf[e.id]===team;}),drin={};emps.forEach(function(e){drin[e.id]=true;});
+        /* erledigte Workitems (nicht mehr in pkgById) zaehlen beim Team, dem sie zugeordnet waren -- unbekannt: beim gewaehlten Team */
+        var ids=allIds.filter(function(id){var p=pkgById[id];return p?!!drin[p.employee]:team===sprCfg.team;});
+        var offen=ids.filter(function(id){return !!pkgById[id];});
+        var geplant=ids.reduce(function(s,id){return s+(Number(sprCfg.zu[id][akt.nr])||0);},0);
+        var kap=emps.reduce(function(s,e){return s+sprKap(e,absenceMap,akt.start,akt.ende);},0);
+        var ueber=emps.filter(function(e){var h=offen.filter(function(id){return pkgById[id].employee===e.id;}).reduce(function(s,id){return s+(Number(sprCfg.zu[id][akt.nr])||0);},0);
+          return h>sprKap(e,absenceMap,akt.start,akt.ende);}).length;
+        var melden=sprMeld.filter(function(m){return m.sprint.nr===akt.nr&&!!drin[m.p.employee];}).length;
+        return {team:team,n:ids.length,offen:offen.length,erledigt:ids.length-offen.length,geplant:r1(geplant),kap:r1(kap),ueber:ueber,melden:melden};}
+      var teams=sprTeams(sprCfg,alle),wahl=teams.indexOf(sprCfg.team)>=0?sprCfg.team:(teams[0]||"");
+      var a=je(wahl);
+      localStorage.setItem("wb-kapazitaetenplaner-sprint",JSON.stringify(Object.assign({quelle:"kapazitaetenplaner",version:APP_VERSION,updated:new Date().toISOString(),heute:heute,
+        sprint:akt,laeuft:akt.start<=heute},a,{teams:teams.map(je)})));
     }catch(e){}
   },[sprCfg,sprMeld,pkgById,employees,hiddenEmp,absenceMap]);
   var pufferCount=analysis.filter(function(r){return r.status==="puffer";}).length;
@@ -9869,6 +9888,28 @@ function Planungstool(){
     var empName=function(id){var e=employees.find(function(x){return x.id===id;});return e?e.name:"";};
     function aendern(fn){setSprCfg(function(c){var n=JSON.parse(JSON.stringify(c));fn(n);return n;});}
     var zu=cfg.zu||{};
+    // v3.7.0: Team waehlen -- Liste, Karten und Kapazitaet nur fuer dieses Team
+    var s_mg=useState(false);var mgOffen=s_mg[0],setMgOffen=s_mg[1];
+    var alleEmps=employees.filter(function(e){return !hiddenEmp[e.name];});
+    var teams=sprTeams(cfg,alleEmps);
+    var team=teams.indexOf(cfg.team)>=0?cfg.team:(selfEmp&&teams.indexOf(sprTeamVon(cfg,selfEmp))>=0?sprTeamVon(cfg,selfEmp):(teams[0]||""));
+    var teamEmps=alleEmps.filter(function(e){return sprTeamVon(cfg,e)===team;});
+    var imTeam={};teamEmps.forEach(function(e){imTeam[e.id]=true;});
+    var mitglieder=React.createElement("div",{"data-spr-mitglieder":"1",style:{marginBottom:12,padding:"10px 12px",border:"1px solid "+A.border,borderRadius:"var(--r-lg)",background:A.surface,maxWidth:760}},
+      React.createElement("div",{style:{display:"flex",gap:8,alignItems:"baseline",marginBottom:6}},
+        React.createElement("b",{style:{fontSize:"var(--fs-sm)",color:A.text}},"Teams zuordnen"),
+        React.createElement("span",{style:kl},"Vorschlag ist die Abteilung aus dem Import. Neues Team: Namen eintippen.")),
+      React.createElement("datalist",{id:"spr-teamliste"},teams.map(function(t){return React.createElement("option",{key:t,value:t});})),
+      React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:"4px 14px"}},
+        (canSeeAll?alleEmps:alleEmps.filter(function(e){return selfEmp&&e.id===selfEmp.id;})).map(function(e){
+          var eigen=!!(cfg.mitglied&&cfg.mitglied[e.id]);
+          return React.createElement("label",{key:e.id,style:Object.assign({},kl,{display:"flex",gap:6,alignItems:"center"})},
+            React.createElement("span",{style:{flex:1,color:A.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},e.name),
+            React.createElement("input",{list:"spr-teamliste",defaultValue:sprTeamVon(cfg,e),"data-spr-mg":e.name,title:eigen?"eigene Zuordnung (leeren = Abteilung)":"aus der Abteilung",
+              onBlur:function(ev){var v=ev.target.value.trim();aendern(function(n){if(!n.mitglied)n.mitglied={};if(!v||v===(e.department||"Ohne Abteilung"))delete n.mitglied[e.id];else n.mitglied[e.id]=v;});},
+              onKeyDown:function(ev){if(ev.key==="Enter")ev.target.blur();},
+              style:Object.assign({},ein,{width:120,fontStyle:eigen?"normal":"italic"})}));
+        })));
     var verplant=function(id,ohne){var z=zu[id]||{};return Object.keys(z).reduce(function(s,nr){return s+(String(nr)===String(ohne)?0:Number(z[nr])||0);},0);};
     function einplanen(id,nr){var p=pkgById[id];if(!p)return;
       aendern(function(n){if(!n.zu[id])n.zu[id]={};if(n.zu[id][nr]!=null)return;
@@ -9885,16 +9926,21 @@ function Planungstool(){
       React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},"Anzeigen",
         React.createElement("select",{value:zeig,onChange:function(e){setZeig(Number(e.target.value));},style:ein},[2,3,4,6,8].map(function(z){return React.createElement("option",{key:z,value:z},z+" Sprints");}))),
       aktI>0?React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},React.createElement("input",{type:"checkbox",checked:vor>0,onChange:function(e){setVor(e.target.checked?1:0);}}),"vorigen Sprint zeigen"):null,
-      React.createElement("span",{style:kl},"Ein Sprint gilt f\u00fcr das ganze Team. Ende eines Sprints \u00e4nderbar; der n\u00e4chste beginnt am Tag danach."));
+      React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},"Team",
+        React.createElement("select",{value:team,"data-spr-team":"1",onChange:function(e){var v=e.target.value;aendern(function(n){n.team=v;});},style:Object.assign({},ein,{fontWeight:700})},
+          teams.map(function(t){return React.createElement("option",{key:t,value:t},t);}))),
+      React.createElement("button",{type:"button","data-spr-mg-knopf":"1",onClick:function(){setMgOffen(!mgOffen);},style:knopf},mgOffen?"Teams schlie\u00dfen":"Teams zuordnen"),
+      React.createElement("span",{style:kl},"Sprintzeiten gelten f\u00fcr alle Teams, Inhalte je Team. Ende eines Sprints \u00e4nderbar; der n\u00e4chste beginnt am Tag danach."));
+    if(mgOffen)kopf=React.createElement(React.Fragment,null,kopf,mitglieder);
     if(!L.length)return React.createElement("div",{style:{padding:20,maxWidth:1100}},kopf,
       React.createElement("div",{style:{padding:30,color:A.textMid,border:"1px dashed "+A.border,borderRadius:"var(--r-lg)"}},"Lege oben fest, wann der erste Sprint beginnt und wie lang ein Sprint ist."));
     // ── Workitems nach Dringlichkeit ──
-    var pkgs=allPkgs.filter(function(p){return p.lcs!=="closed"&&(canSeeAll||(selfEmp&&p.employee===selfEmp.id));}).slice().sort(function(a,b){return sprDringlich(a,b,heute);});
+    var pkgs=allPkgs.filter(function(p){return p.lcs!=="closed"&&imTeam[p.employee]&&(canSeeAll||(selfEmp&&p.employee===selfEmp.id));}).slice().sort(function(a,b){return sprDringlich(a,b,heute);});
     var meldIds={};sprMeld.forEach(function(m){meldIds[m.p.id]=m.grund;});
     var marke=function(p){if(p.end&&p.end<heute)return ["\u00fcberf\u00e4llig",A.coral];var l=p.fcDueDate||p.bcDueDate;if(l)return ["Lieferung "+tg(l),A.amber];if(p.lcs==="started")return ["in Arbeit",A.sky];return ["",A.textLight];};
     var liste=React.createElement("div",{"data-spr-liste":"1",style:{flex:"1 1 380px",minWidth:300,maxHeight:"70vh",overflow:"auto",border:"1px solid "+A.border,borderRadius:"var(--r-lg)",background:A.surface}},
       React.createElement("div",{style:{padding:"8px 12px",borderBottom:"1px solid "+A.border,position:"sticky",top:0,background:A.surface,zIndex:1}},
-        React.createElement("b",{style:{fontSize:"var(--fs-sm)",color:A.text}},"Workitems nach Dringlichkeit"),
+        React.createElement("b",{style:{fontSize:"var(--fs-sm)",color:A.text}},"Workitems nach Dringlichkeit \u00b7 "+team),
         React.createElement("div",{style:kl},"\u00fcberf\u00e4llig \u2192 n\u00e4chster Liefertermin \u2192 in Arbeit \u2192 Plandatum \u00b7 ziehen oder antippen, dann Sprint antippen")),
       pkgs.map(function(p){
         var r=sprRest(p),v=verplant(p.id),m=marke(p),gew=sprWahl===p.id,sp=Object.keys(zu[p.id]||{}).sort(function(a,b){return a-b;});
@@ -9917,8 +9963,8 @@ function Planungstool(){
     // ── Sprints ──
     var karten=React.createElement("div",{style:{flex:"2 1 520px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12,alignContent:"start"}},
       sichtbar.map(function(x){
-        var ids=Object.keys(zu).filter(function(id){return zu[id][x.nr]!=null;});
-        var emps=employees.filter(function(e){return !hiddenEmp[e.name];});
+        var ids=Object.keys(zu).filter(function(id){if(zu[id][x.nr]==null)return false;var p=pkgById[id];return p?!!imTeam[p.employee]:true;});
+        var emps=teamEmps;
         var kapJe={},lastJe={};emps.forEach(function(e){kapJe[e.id]=sprKap(e,absenceMap,x.start,x.ende);lastJe[e.id]=0;});
         ids.forEach(function(id){var p=pkgById[id];if(p&&lastJe[p.employee]!=null)lastJe[p.employee]+=Number(zu[id][x.nr])||0;});
         var kap=emps.reduce(function(s,e){return s+kapJe[e.id];},0),last=ids.reduce(function(s,id){return s+(pkgById[id]?Number(zu[id][x.nr])||0:0);},0);
