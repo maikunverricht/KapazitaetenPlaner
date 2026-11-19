@@ -2555,7 +2555,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.19.0";
+var APP_VERSION="3.20.0";
+// v3.20.0: Planer- vs. CQ-Workitems (Maik): Solange es kein CQ-Workitem gibt, gelten die vom Planer; ein CQ-Workitem ersetzt die offenen Planer-Workitems seines Schritts (gleiche Rolle). Nach jedem Import automatisch, Schritt aus dem Titel (SWE.1-6); nicht Erkanntes bleibt zum Ziehen. Von Hand geloeste Zuordnungen bleiben geloest.
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
 // v3.19.0: Navigation gebuendelt (Design-Check Massnahme 5): "Handlungsbedarf" = Umplanung + Konflikte, "Auslastung" = heute + Prognose (Forecast); je ein Umschalter ueber dem Inhalt. Ansichtsschluessel bleiben.
 // v3.18.1: "Plan vs. Ist" heisst "Planungsstand vs. heute" (Terminvergleich gegen gesicherten Stand); Link zur Auswertung "Aufwand geplant vs. gebucht".
@@ -4841,6 +4842,14 @@ function vlTestSchritt(t){t=String(t||"");
   if(/weak\s*-?\s*spot|unit\s*-?\s*test|modul\s*-?\s*test|komponenten\s*-?\s*test|SWE\.?\s*4/i.test(t))return "SWE.4";
   if(/integrations?\s*-?\s*test|cluster\s*-?\s*test|SWE\.?\s*5/i.test(t))return "SWE.5";
   if(/qualifi|system\s*-?\s*test|abnahme|SWE\.?\s*6/i.test(t))return "SWE.6";
+  return "";}
+// v3.20.0: Schritt aus dem Titel fuer alle V-Schritte (Test zuerst, dann SWE.n im Titel, dann Stichwoerter)
+function vlSchrittAusTitel(t){t=String(t||"");
+  var tst=vlTestSchritt(t);if(tst)return tst;
+  var m=/SWE\.?\s*([1-6])\b/i.exec(t);if(m)return "SWE."+m[1];
+  if(/feinentwurf|detail\s*-?\s*design|funktionsentwurf|implementier|umsetzung|codierung|coding/i.test(t))return "SWE.3";
+  if(/architektur|architecture|schnittstelle|interface/i.test(t))return "SWE.2";
+  if(/anforderung|requirement|lastenheft|spezifikation|specification/i.test(t))return "SWE.1";
   return "";}
 function vlSchrittStatus(ws){
   if(!ws.length)return "";
@@ -15077,16 +15086,21 @@ function Planungstool(){
     setVlWahl(null);
   }
   // v3.4.0 (Maik): vorhandene ClearQuest-Workitems des Issues einem Schritt
-  // zuordnen. Sie ersetzen die im Werkzeug angelegten Workitems desselben
-  // Bearbeiters in diesem Schritt; ihre Termine bleiben unangetastet.
+  // zuordnen; ihre Termine bleiben unangetastet.
+  // v3.20.0 (Maik): "Solange es kein Workitem aus CQ gibt, gelten die vom Planer.
+  // Sobald die Workitems in CQ angelegt sind, ersetzen sie die vom Planer."
+  // Ein CQ-Workitem im Schritt ersetzt alle offenen Planer-Workitems derselben
+  // Rolle (Entwicklung bzw. Review) in diesem Schritt -- egal welcher Bearbeiter.
+  // Abgeschlossene Planer-Workitems bleiben als Historie. Von Hand geloeste
+  // Zuordnungen merkt sich a.cqAus, damit die Automatik sie nicht zurueckholt.
   function vlCqZuordnen(iid,wid,k){
     vlAendern(function(n){
-      var a=vlAnlegen(n,iid);if(!a.cq)a.cq={};
+      var a=vlAnlegen(n,iid);if(!a.cq)a.cq={};if(!a.cqAus)a.cqAus={};
       var alt=a.cq[wid];
-      if(!k)delete a.cq[wid];else a.cq[wid]=k;
+      if(!k){delete a.cq[wid];a.cqAus[wid]=1;}else{a.cq[wid]=k;delete a.cqAus[wid];}
       if(k){
         var cw=vlCqVon(a,k).find(function(w){return w.id===wid;});
-        vlWisVon(a,k).forEach(function(w){if(w.lcs!=="closed"&&cw&&(w.ma===cw.ma||!cw.ma))delete a.wis[w.id];});
+        vlWisVon(a,k).forEach(function(w){if(w.lcs!=="closed"&&cw&&vlIstReview(w)===vlIstReview(cw))delete a.wis[w.id];});
         Object.keys(a.wis).forEach(function(id){var w=a.wis[id];w.deps=(w.deps||[]).filter(function(d){return a.wis[d]||a.cq[d];});});
         vlVerteilen(n,a,k);
       }
@@ -15094,6 +15108,20 @@ function Planungstool(){
       vlPlanenIn(n,iid,false);
     });
   }
+  // v3.20.0: CQ-Workitems der Auftraege im V automatisch ihrem Schritt zuordnen
+  // (Schritt aus dem Titel). Laeuft nach jedem ClearQuest-Import. Was sich nicht
+  // erkennen laesst, bleibt als Chip zum Ziehen.
+  function vlCqAutoListe(){
+    var vl=vlRef.current&&vlRef.current.vl,aus=[];if(!vl||!vl.auftraege)return aus;
+    Object.keys(vl.auftraege).forEach(function(iid){var a=vl.auftraege[iid];if(!a)return;var z=a.cq||{},w=a.cqAus||{};
+      vlCqPakete(iid).forEach(function(p){if(z[p.id]||w[p.id]||(a.wis&&a.wis[p.id]))return;var k=vlSchrittAusTitel(p.title);if(k)aus.push([iid,p.id,k]);});});
+    return aus;
+  }
+  useEffect(function(){
+    var l=vlCqAutoListe();if(!l.length)return;
+    l.forEach(function(x){vlCqZuordnen(x[0],x[1],x[2]);});
+    setToast(l.length+" ClearQuest-Workitem"+(l.length>1?"s":"")+" ersetz"+(l.length>1?"en":"t")+" Planer-Workitems");setTimeout(function(){setToast(null);},4000);
+  },[releasesRaw,rawData]);
   function vlWi(iid,id,fn){
     vlAendern(function(n){var a=n.auftraege[iid],w=a&&a.wis[id];if(!w)return;fn(w,a,n);});
   }
@@ -15324,11 +15352,11 @@ function Planungstool(){
     // ── v3.4.0: vorhandene ClearQuest-Workitems des Issues ──
     var cqTabelle=cqAlle.length?React.createElement("div",{"data-vl-cq":iid,style:{marginTop:10}},
       React.createElement("div",{style:{display:"flex",gap:10,alignItems:"center",marginBottom:4,flexWrap:"wrap"}},
-        React.createElement("div",{style:Object.assign({},klein,{fontWeight:700})},"Workitems aus ClearQuest \u00b7 zuordnen im V oben (ersetzt die dort angelegten desselben Bearbeiters)"),
-        (function(){var vor=cqAlle.filter(function(p){return !(a&&a.cq&&a.cq[p.id])&&vlTestSchritt(p.title);});
+        React.createElement("div",{style:Object.assign({},klein,{fontWeight:700})},"Workitems aus ClearQuest \u00b7 ersetzen die Planer-Workitems ihres Schritts \u00b7 Schritt aus dem Titel, sonst im V oben zuordnen"),
+        (function(){var vor=cqAlle.filter(function(p){return !(a&&a.cq&&a.cq[p.id])&&vlSchrittAusTitel(p.title);});
           return vor.length&&darf?React.createElement("button",{type:"button","data-vl-test-erkennen":iid,style:knopf,
-            title:vor.map(function(p){return p.id+" \u2192 "+vlTestSchritt(p.title);}).join("\n"),
-            onClick:function(){vor.forEach(function(p){vlCqZuordnen(iid,p.id,vlTestSchritt(p.title));});}},"Testschritte erkennen ("+vor.length+")"):null;})()),
+            title:vor.map(function(p){return p.id+" \u2192 "+vlSchrittAusTitel(p.title);}).join("\n"),
+            onClick:function(){vor.forEach(function(p){vlCqZuordnen(iid,p.id,vlSchrittAusTitel(p.title));});}},"Schritte erkennen ("+vor.length+")"):null;})()),
       React.createElement("table",{style:{borderCollapse:"collapse",minWidth:760}},
         React.createElement("thead",null,React.createElement("tr",null,th("Workitem"),th("Titel"),th("Bearbeiter"),th("Rest"),th("Start"),th("Plandatum"),th("Status"),th("Schritt"))),
         React.createElement("tbody",null,cqAlle.map(function(p){
