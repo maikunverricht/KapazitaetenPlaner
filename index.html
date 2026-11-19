@@ -2551,8 +2551,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.14.0";
+var APP_VERSION="3.14.1";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.14.1: Sprint -- Ringe (FC/BC) scrollen mit (sticky); Bearbeiter-Gruppen in Sprintkarten und Sprint-Sync auf-/zuklappbar (gemerkt).
 // v3.14.0: Geschlossene Workitems zaehlen beim Fortschritt mit. Der Import legt sie getrennt ab (ptool_closed_wis: id, Titel, Stunden, Bearbeiter, BC, FC, Issue) -- nicht in der Planung. Flow (Fortschritt/Gesamt je Issue) und die Ringe im Sprint-Sync rechnen sie als erledigt ein.
 // v3.13.0: Sprintkarten und Sprint-Sync -- Workitems stehen unter dem Namen ihres Bearbeiters (mit Last/Kapazitaet bzw. Stunden); erledigte ohne Bearbeiter unter "erledigt".
 // v3.12.0: Sprint-Sync -- Klick auf ein Workitem oeffnet daneben zwei Ringe: FC-Fortschritt (Stunden aller WIs der FC, erledigt = Plan - Rest) mit dem Status der Issues an der FC, und BC-Fortschritt.
@@ -9998,6 +9999,9 @@ function Planungstool(){
     // v3.7.0: Team waehlen -- Liste, Karten und Kapazitaet nur fuer dieses Team
     var s_mg=useState(false);var mgOffen=s_mg[0],setMgOffen=s_mg[1];
     var s_sw=useState("");var syncWahl=s_sw[0],setSyncWahl=s_sw[1];
+    var s_kl=useState(function(){try{return JSON.parse(localStorage.getItem("ptool_spr_zu")||"{}")||{};}catch(e){return {};}});var zuKl=s_kl[0];
+    function klapp(k){s_kl[1](function(o){var n=Object.assign({},o);if(n[k])delete n[k];else n[k]=1;try{localStorage.setItem("ptool_spr_zu",JSON.stringify(n));}catch(e){}return n;});}
+    var pfeil=function(k){return React.createElement("span",{"aria-hidden":"true",style:{display:"inline-block",width:12,color:A.textLight,transform:zuKl[k]?"none":"rotate(90deg)",transition:"transform .15s"}},"\u25b8");};
     var s_rt=useState(function(){try{return localStorage.getItem("ptool_spr_reiter")||"planen";}catch(e){return "planen";}});var reiter=s_rt[0];
     function setReiter(v){s_rt[1](v);try{localStorage.setItem("ptool_spr_reiter",v);}catch(e){}}
     var s_vz=useState(false);var verplZeig=s_vz[0],setVerplZeig=s_vz[1];
@@ -10137,16 +10141,19 @@ function Planungstool(){
             var proMa={},ohne=[];ids.forEach(function(id){var p=pkgById[id];if(p&&lastJe[p.employee]!=null)(proMa[p.employee]=proMa[p.employee]||[]).push(id);else ohne.push(id);});
             return React.createElement("div",{style:{marginTop:6,display:"flex",flexDirection:"column",gap:6}},
               emps.filter(function(e){return proMa[e.id];}).map(function(e){var ue=lastJe[e.id]>kapJe[e.id];
+                var kk="p"+x.nr+"|"+e.id;
                 return React.createElement("div",{key:e.id,"data-spr-ma":e.name,style:{display:"flex",flexDirection:"column",gap:3}},
-                  React.createElement("div",{style:{display:"flex",justifyContent:"space-between",fontSize:"var(--fs-xs)",fontWeight:700,color:ue?A.coral:A.text,borderBottom:"1px solid "+A.border,paddingBottom:2}},
-                    React.createElement("span",null,e.name),React.createElement("span",{style:{fontWeight:600,color:ue?A.coral:A.textMid}},nh(lastJe[e.id])+" / "+nh(kapJe[e.id])+" h"+(ue?" \u26a0":""))),
-                  proMa[e.id].map(wiZeile));}),
+                  React.createElement("div",{role:"button",tabIndex:0,"aria-expanded":!zuKl[kk],onClick:function(ev){ev.stopPropagation();klapp(kk);},
+                    style:{display:"flex",justifyContent:"space-between",fontSize:"var(--fs-xs)",fontWeight:700,color:ue?A.coral:A.text,borderBottom:"1px solid "+A.border,paddingBottom:2,cursor:"pointer",userSelect:"none"}},
+                    React.createElement("span",null,pfeil(kk),e.name,zuKl[kk]?React.createElement("span",{style:{fontWeight:400,color:A.textLight}}," \u00b7 "+proMa[e.id].length+" WI"):null),React.createElement("span",{style:{fontWeight:600,color:ue?A.coral:A.textMid}},nh(lastJe[e.id])+" / "+nh(kapJe[e.id])+" h"+(ue?" \u26a0":""))),
+                  zuKl[kk]?null:proMa[e.id].map(wiZeile));}),
               ohne.length?React.createElement("div",{"data-spr-ma":"erledigt",style:{display:"flex",flexDirection:"column",gap:3}},
                 React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.textMid,borderBottom:"1px solid "+A.border,paddingBottom:2}},"erledigt"),
                 ohne.map(wiZeile)):null,
             !ids.length?React.createElement("span",{style:kl},sprWahl?"antippen, um das gew\u00e4hlte Workitem einzuplanen":"Workitems hierher ziehen"):null);})());
       }));
-    if(reiter==="sync")return React.createElement("div",{style:{padding:20,overflow:"auto",flex:1,minHeight:0}},kopf,syncAnsicht());
+    // v3.14.1: ohne eigenes overflow, sonst haftet die Ringkarte nicht (Scroller ist .main-scroll)
+    if(reiter==="sync")return React.createElement("div",{style:{padding:20,flex:1,minHeight:0}},kopf,syncAnsicht());
     return React.createElement("div",{style:{padding:20,overflow:"auto",flex:1,minHeight:0}},kopf,
       React.createElement("div",{style:{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-start"}},liste,karten));
     // ── v3.11.0: Sprint-Sync ──
@@ -10171,10 +10178,14 @@ function Planungstool(){
         liste.forEach(function(id){var m=(pkgById[id]&&pkgById[id].employee)||maAlle[id]||"";if(!G[m]){G[m]=[];ord.push(m);}G[m].push(id);});
         ord.sort(function(a,b){return (empName(a)||"\uffff").localeCompare(empName(b)||"\uffff","de");});
         var out=[];ord.forEach(function(m){var ids=G[m],h=ids.reduce(function(s,id){return s+(Number(zu[id][x.nr])||0);},0),f=ids.filter(erledigt).length;
-          out.push(React.createElement("div",{key:"ma-"+m,"data-sync-ma":empName(m)||"ohne",style:{display:"flex",gap:8,alignItems:"baseline",padding:"5px 12px",background:A.bg,borderTop:"1px solid "+A.border}},
+          var kk="s"+x.nr+"|"+m;
+          out.push(React.createElement("div",{key:"ma-"+m,"data-sync-ma":empName(m)||"ohne",role:"button",tabIndex:0,"aria-expanded":!zuKl[kk],
+            onClick:function(){klapp(kk);},onKeyDown:function(e){if(e.key==="Enter"||e.key===" "){e.preventDefault();klapp(kk);}},
+            style:{display:"flex",gap:6,alignItems:"baseline",padding:"5px 12px",background:A.bg,borderTop:"1px solid "+A.border,cursor:"pointer",userSelect:"none"}},
+            pfeil(kk),
             React.createElement("b",{style:{fontSize:"var(--fs-xs)",color:A.text}},empName(m)||"ohne Bearbeiter"),
             React.createElement("span",{style:Object.assign({},kl,{marginLeft:"auto"})},f+" / "+ids.length+" erledigt \u00b7 "+nh(h)+" h")));
-          ids.forEach(function(id){out.push(fn(id));});});
+          if(!zuKl[kk])ids.forEach(function(id){out.push(fn(id));});});
         return out;}
       function zeile(id,x,rechts){var p=pkgById[id],fertig=erledigt(id),h=Number(zu[id][x.nr])||0;
         var st=fertig?["\u2713 erledigt",A.green]:p.lcs==="started"?["in Arbeit",A.sky]:p.lcs==="blocked"?["blockiert",A.coral]:["nicht begonnen",A.textLight];
@@ -10200,7 +10211,7 @@ function Planungstool(){
             React.createElement("div",{style:{width:Math.round(q*100)+"%",height:"100%",background:A.green}})),
           sub?React.createElement("div",{style:Object.assign({},kl,{marginTop:4})},sub):null);
       }
-      var spalte={flex:"1 1 420px",minWidth:300,border:"1px solid "+A.border,borderRadius:"var(--r-lg)",background:A.surface,overflow:"hidden"};
+      var spalte={flex:"1 1 300px",minWidth:260,border:"1px solid "+A.border,borderRadius:"var(--r-lg)",background:A.surface,overflow:"hidden"};
       // Voriger Sprint
       var links;
       if(!alt)links=React.createElement("div",{style:Object.assign({},spalte,{padding:20,color:A.textMid})},"Es gibt noch keinen vorigen Sprint.");
@@ -10244,7 +10255,7 @@ function Planungstool(){
       var cw=(closedWis||[]).filter(function(c){return c.id===id;})[0];
       if(!ort&&cw){(activeReleases||[]).forEach(function(rel){if(rel.name!==cw.bc)return;var c0=null;(rel.components||[]).forEach(function(c){if(c.name===cw.fc)c0=c;});
         ort={r:rel,c:c0,p:{id:id,title:cw.t,hours:cw.h,lcs:"closed"}};});}
-      var box={flex:"0 1 320px",minWidth:260,border:"1px solid "+A.border,borderRadius:"var(--r-lg)",background:A.surface,padding:"12px 14px",position:"relative"};
+      var box={flex:"0 0 300px",minWidth:260,border:"1px solid "+A.border,borderRadius:"var(--r-lg)",background:A.surface,padding:"12px 14px",position:"sticky",top:8,alignSelf:"flex-start",zIndex:2,boxShadow:"0 6px 18px rgb(var(--c-ink-rgb) / 0.08)"};
       var zu2=React.createElement("button",{type:"button","data-sync-zu":"1",onClick:function(){setSyncWahl("");},title:"schlie\u00dfen",style:Object.assign({},knopf,{position:"absolute",top:8,right:8,padding:"0 7px"})},"\u2715");
       if(!ort)return React.createElement("div",{"data-sync-ringe":id,style:box},zu2,React.createElement("div",{style:{color:A.textMid,fontSize:"var(--fs-xs)"}},id+" ist nicht mehr in den Daten."));
       function stand(pk){var plan=0,fertig=0,n=0,z=0;
