@@ -2551,8 +2551,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.8.0";
+var APP_VERSION="3.9.0";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.9.0: Dashboard M0 -- Ueberfaellig, Startet heute und Faellig als drei Spalten, darin nach Issue gruppiert (Issue-Index bzw. V-Durchlauf; sonst "ohne Issue"). Die Saetze dazu entfallen in der Kachel, das Fenster nach der Anmeldung bleibt wie es ist.
 // v3.8.0: Zeiterfassung ausgegliedert -- der Planer laeuft ohne Modul zeit; mit ?variante=zeit startet dieselbe Datei als eigene Zeiterfassung (nur Modul zeit + Kern). Daten bleiben dieselben (gleiche Herkunft, gleiche Schluessel).
 // v3.7.0: Sprints je Team -- gemeinsamer Takt fuer alle Teams; Team = Abteilung, im Sprint-Reiter anpassbar (mitglied). Liste, Karten, Kapazitaet und Meldungen gelten fuer das gewaehlte Team; Lesekopie mit Team und teams[].
 // v3.6.0: Sprints -- Team-Sprints mit festen Zeiten, Workitems nach Dringlichkeit in Sprints einplanen (auch ueber mehrere Sprints); Workitems im Sprintzeitraum ausserhalb des Sprints melden sich in der Umplanung. Lesekopie wb-kapazitaetenplaner-sprint fuer das Kontor-Widget.
@@ -6227,6 +6228,28 @@ function buildBriefing(o){
   var fH=faellig.reduce(function(a,p){return a+rem(p);},0),fCap=netH(T,h5);
   var fLate=faellig.filter(function(p){return !!late(p);});
   var fRed=fH>fCap+0.01||fLate.length>0;
+  // v3.9.0: dieselben drei Listen nach Issue gruppiert -- fuer die Spalten im Dashboard
+  var wi2iss={},idx=o.issueIdx||{};
+  Object.keys(idx).forEach(function(iid){(idx[iid].wis||[]).forEach(function(w){wi2iss[w]=iid;});});
+  function gruppen(liste,note){
+    var g={},ord=[];
+    liste.forEach(function(p){
+      var iid=p._vIss||wi2iss[p.id]||"";
+      if(!g[iid]){g[iid]={iid:iid,t:iid?((idx[iid]&&idx[iid].t)||""):"",h:0,wis:[]};ord.push(iid);}
+      var n=note(p);g[iid].wis.push({id:String(p.id),title:String(p.title||""),label:wiLabel(p.title,p.rn,p.cn)||String(p.id),h:rem(p),note:n[0],warn:!!n[1]});
+      g[iid].h+=rem(p);
+    });
+    return ord.map(function(k){return g[k];}).sort(function(a,b){return (a.iid?0:1)-(b.iid?0:1);});
+  }
+  out.board=[
+    {k:"ueber",titel:"Überfällig",sev:"red",n:ueber.length,h:ueber.reduce(function(a,p){return a+rem(p);},0),
+      gr:gruppen(ueber,function(p){return ["seit "+brDay(p.end),true];})},
+    {k:"start",titel:"Startet heute",sev:"info",n:heute.length,h:heute.reduce(function(a,p){return a+rem(p);},0),
+      gr:gruppen(heute,function(p){return ["bis "+brDay(p.end),false];})},
+    {k:"faellig",titel:"Fällig bis "+brWdDay(h5),sev:fRed?"red":"amber",n:faellig.length,h:fH,
+      fuss:hrs(fH)+" offen bei "+hrs(fCap)+" verfügbar"+(fH>fCap+0.01?" – geht nicht auf":""),
+      gr:gruppen(faellig,function(p){var l=late(p);return [l?brWdDay(p.end)+" · Prognose "+brDay(l):brWdDay(p.end),!!l];})}
+  ];
 
   // Business Cases, an denen ich beteiligt bin -- Ampel wie Radar und M6
   var bcs=[];
@@ -6355,7 +6378,7 @@ function BriefingList(p){
       w.note?React.createElement("span",{style:{flexShrink:0,fontSize:"var(--fs-xs)",fontWeight:700,
         color:w.warn?A.coralInk:A.textLight}},w.note):null);
   }
-  var stats=(b.me&&b.stats.length)?React.createElement("div",{"data-brief-stats":"1",
+  var stats=(b.me&&b.stats.length&&!p.ohneStats)?React.createElement("div",{"data-brief-stats":"1",
     style:{display:"flex",flexWrap:"wrap",gap:8,marginBottom:10}},
     b.stats.map(function(s){
       var red=s.sev==="red",amb=s.sev==="amber",inf=s.sev==="info";
@@ -6367,7 +6390,8 @@ function BriefingList(p){
           color:red?A.coralInk:amb?A.amberInk:inf?A.mintInk:A.textLight}},String(s.n)),
         React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textMid,marginTop:3,lineHeight:1.3}},s.label));
     })):null;
-  var rows=b.items.map(function(it,i){
+  var ohne=p.ohne||{};
+  var rows=b.items.filter(function(it){return !ohne[it.k];}).map(function(it,i){
     var g=it.go,clickable=!!(g&&canGo(g)),isData=it.k==="daten";
     return React.createElement("div",{key:it.k,"data-brief-item":it.k,"data-import-ask":isData?"1":undefined,
       role:clickable?"button":undefined,tabIndex:clickable?0:undefined,
@@ -6390,6 +6414,41 @@ function BriefingList(p){
         fontSize:"var(--fs-lg)",lineHeight:1.3}},"›"):null);
   });
   return React.createElement("div",{"data-brief-list":"1"},stats,React.createElement("div",null,rows));
+}
+
+// v3.9.0: Ueberfaellig / Startet heute / Faellig als Spalten, je Spalte nach Issue gruppiert.
+function HeuteBoard(p){
+  var b=p.b;if(!b||!b.board)return null;
+  var nh=function(h){return String(Math.round(h*10)/10).replace(".",",")+"\u00a0h";};
+  var FARBE={red:[A.coral,A.coralLight,A.coralInk],amber:[A.amber,A.amberLight,A.amberInk],info:[A.mint,A.mintLight,A.mintInk]};
+  return React.createElement("div",{"data-heute-board":"1",style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:10,marginBottom:10,alignItems:"start"}},
+    b.board.map(function(sp){
+      var f=FARBE[sp.n?sp.sev:"info"]||FARBE.info,leer=!sp.n;
+      return React.createElement("div",{key:sp.k,"data-heute-spalte":sp.k,style:{border:"1px solid "+(leer?A.border:f[0]),borderRadius:"var(--r-lg)",background:A.surface,overflow:"hidden",display:"flex",flexDirection:"column",minWidth:0}},
+        React.createElement("div",{style:{display:"flex",alignItems:"baseline",gap:8,padding:"8px 12px",background:leer?A.bg:f[1]}},
+          React.createElement("span",{style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-xl)",fontWeight:700,color:leer?A.textLight:f[2]}},String(sp.n)),
+          React.createElement("b",{style:{fontSize:"var(--fs-sm)",color:A.text}},sp.titel),
+          sp.n?React.createElement("span",{style:{marginLeft:"auto",fontSize:"var(--fs-xs)",color:A.textMid}},nh(sp.h)):null),
+        React.createElement("div",{style:{padding:"4px 10px 8px",maxHeight:320,overflow:"auto",flex:1}},
+          leer?React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textLight,padding:"6px 2px"}},"nichts"):
+          sp.gr.map(function(g){
+            return React.createElement("div",{key:g.iid||"-","data-heute-issue":g.iid||"ohne",style:{marginTop:6}},
+              React.createElement("div",{title:g.t||"",style:{display:"flex",gap:6,alignItems:"baseline",fontSize:"var(--fs-xs)",color:A.textMid,borderBottom:"1px solid "+A.border,paddingBottom:2,marginBottom:2}},
+                React.createElement("span",{style:{fontFamily:"var(--font-mono)",fontWeight:700,color:g.iid?A.text:A.textLight,flexShrink:0}},g.iid||"ohne Issue"),
+                g.t?React.createElement("span",{style:{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},g.t):null,
+                React.createElement("span",{style:{marginLeft:"auto",flexShrink:0}},nh(g.h))),
+              g.wis.map(function(w){
+                return React.createElement("button",{key:w.id,type:"button","data-brief-wi":w.id,title:w.id+(w.title?" \u00b7 "+w.title:""),
+                  onClick:function(){if(p.onGo)p.onGo({t:"wi",id:w.id});},
+                  style:{display:"grid",gridTemplateColumns:"1fr auto",gap:"0 8px",width:"100%",textAlign:"left",padding:"3px 4px",border:"none",borderRadius:"var(--r-sm)",background:"transparent",cursor:"pointer",color:A.text,fontFamily:"var(--font-body)"}},
+                  React.createElement("span",{style:{fontSize:"var(--fs-sm)",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},w.label),
+                  React.createElement("span",{style:{fontSize:"var(--fs-xs)",color:A.textMid,textAlign:"right"}},nh(w.h)),
+                  React.createElement("span",{style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-2xs)",color:A.textLight}},w.id),
+                  React.createElement("span",{style:{fontSize:"var(--fs-2xs)",fontWeight:700,color:w.warn?A.coralInk:A.textLight,textAlign:"right"}},w.note));
+              }));
+          })),
+        sp.fuss&&sp.n?React.createElement("div",{style:{padding:"5px 12px",borderTop:"1px solid "+A.border,fontSize:"var(--fs-2xs)",color:sp.sev==="red"?A.coralInk:A.textMid}},sp.fuss):null);
+    }));
 }
 
 // Das Fenster nach der Anmeldung. Escape und ein Tipp daneben schliessen es.
@@ -8143,9 +8202,9 @@ function Planungstool(){
     if(dashUser===null)return null;
     return buildBriefing({today:briefToday,me:selfEmp,named:!!dashUser,releases:activeReleases,
       analysis:analysis,loadMap:loadMap,absMap:absenceMap,absences:absences,holidayMap:holidayMap,
-      lastImport:lastImport,canSeeAll:canSeeAll,employees:employees,
+      lastImport:lastImport,canSeeAll:canSeeAll,employees:employees,issueIdx:issueIdx,
       scenName:activeScen?(activeScen.name||"Szenario"):""});
-  },[briefToday,dashUser,selfEmp,activeReleases,analysis,loadMap,absenceMap,absences,holidayMap,lastImport,canSeeAll,employees,activeScen]);
+  },[briefToday,dashUser,selfEmp,activeReleases,analysis,loadMap,absenceMap,absences,holidayMap,lastImport,canSeeAll,employees,activeScen,issueIdx]);
   function briefCanGo(g){return !!g&&(g.t!=="view"||viewAllowed(g.v));}
   function briefGo(g){
     if(!briefCanGo(g))return;
@@ -13310,7 +13369,9 @@ function Planungstool(){
 
         // v2.98.0: Briefing -- dieselbe Liste wie das Fenster nach der Anmeldung.
         Card({tag:"M0",title:"Heute · "+brWdDay(todayStr),wide:true},
-          React.createElement(BriefingList,{b:briefing,onGo:briefGo,canGo:briefCanGo}),
+          briefing&&briefing.board?React.createElement(HeuteBoard,{b:briefing,onGo:briefGo}):null,
+          React.createElement(BriefingList,{b:briefing,onGo:briefGo,canGo:briefCanGo,
+            ohne:briefing&&briefing.board?{ueber:1,start:1,faellig:1}:null,ohneStats:!!(briefing&&briefing.board)}),
           // v2.99.0: Aenderungen des letzten Imports, bis zum naechsten Import
           impView&&React.createElement("div",{"data-imp-tile":"1",style:{marginTop:12,paddingTop:10,borderTop:"1px solid "+A.border}},
             React.createElement("div",{style:{fontSize:"var(--fs-sm)",fontWeight:800,color:A.text,marginBottom:6}},
@@ -13439,7 +13500,8 @@ function Planungstool(){
                 " unver\u00e4ndert \u2014 gegen \u201e"+planIst.name+"\u201c")
           ):Empty("Kein Planungsstand gespeichert \u2014 lege einen Snapshot an, um zu vergleichen.")),
 
-        Card({tag:"M13",title:"Meine erfasste Zeit"},
+        // v3.9.0: im Planer ohne Modul Zeit entfaellt die Kachel (Zeiterfassung ist eigenes Werkzeug)
+        !modOn("zeit")?null:Card({tag:"M13",title:"Meine erfasste Zeit"},
           (function(){
             // v2.74.0: Was die Zeiterfassung liefert, gehoert auch aufs
             // Dashboard -- bisher musste man dafuer die Ansicht wechseln.
