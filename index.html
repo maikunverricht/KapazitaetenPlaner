@@ -16,12 +16,15 @@
 /* Design-Check 19.11.2026: Klickziele mindestens 24 px */
 button,[role="button"],select{min-height:24px}
 button{min-width:24px}
+
+/* Design-Check 19.11.2026: Akzentfarben als Text im hellen Modus dunkler */
+html[data-theme="light"]{--amber-text:#8A5A00;--teal-text:#0F6E5E}
 </style>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- v2.90.0: Werkbank-Schriften. Ohne Netz greift die Ersatzkette in --font-body. -->
   <script>try{if(localStorage.getItem("ptool_fx")==="off")document.documentElement.setAttribute("data-fx","off");
     var _t=localStorage.getItem("ptool_theme");if(_t==="dark"||_t==="light")document.documentElement.setAttribute("data-theme",_t);}catch(e){}</script>
-  <title>CAPLAN · Kapazitätsplanung</title>
+  <title>KapazitätenPlaner · Kontor</title>
   <!-- v2.56.0: Signet als Inline-SVG-Favicon, damit die Datei eigenstaendig bleibt -->
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='2' y='3' width='11' height='2.6' rx='1.3' fill='%23111923'/><rect x='2' y='6.7' width='6' height='2.6' rx='1.3' fill='%232FA894'/><rect x='2' y='10.4' width='9.5' height='2.6' rx='1.3' fill='%234A5563'/></svg>">
   <style>
@@ -477,7 +480,7 @@ button{min-width:24px}
 
 <div id="loading">
   <div class="logo"><svg viewBox="0 0 16 16" width="30" height="30"><rect x="2" y="3" width="11" height="2.6" rx="1.3" style="fill:var(--c-text)"/><rect x="2" y="6.7" width="6" height="2.6" rx="1.3" style="fill:var(--c-mint)"/><rect x="2" y="10.4" width="9.5" height="2.6" rx="1.3" style="fill:var(--c-text-mid)"/></svg></div>
-  <p>CAPLAN wird geladen…</p>
+  <p>KapazitätenPlaner wird geladen…</p>
 </div>
 
 <div class="wb-bg" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i></div>
@@ -2148,7 +2151,7 @@ if(typeof window!=="undefined"){
 
 // v2.52.0: Startsequenz. Startbreiten der Balken sind bewusst ungleich, damit
 // die Reihe vor der Verwandlung wie ein echter Balkenplan aussieht.
-var BOOT_WORD="CAPLAN";
+var BOOT_WORD="KapazitätenPlaner";
 var BOOT_BARW=[74,48,62,86,40,68];
 // v2.56.0: Farbwelt des Signets -- Anthrazit, Mint, Grau, im Wechsel.
 var BOOT_COLS=["#111923","#2FA894","#4A5563","#111923","#2FA894","#4A5563"]; // v2.90.0: Werkbank
@@ -2552,8 +2555,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.17.1";
+var APP_VERSION="3.17.2";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.17.2: Name wie im Kontor: KapazitaetenPlaner statt CAPLAN (Design-Check Massnahme 3).
 // v3.17.1: Lesbarkeit (Design-Check): gedaempfte Textfarbe dunkler, Schriftstufen micro 10, 2xs 11, xs 12, sm 12.5, md 13 px; Klickziele mind. 24 px.
 // v3.17.0: Prozessmarke (WBMarke) ueber dem Inhalt: Schritt "0 Einplanen", aktives Issue, Status, weiter zu (1). In der Zeiterfassung nicht.
 // v3.16.0: Test als Arbeitsschritt -- (1) Ein Testschritt SWE.4-6 ist erst gruen, wenn seine Workitems geschlossen UND die Tests im TestcaseManager bestanden sind; Fehlschlag = blockiert, offene Tests = in Arbeit. (2) "Testschritte erkennen" ordnet ClearQuest-Workitems nach dem Titel SWE.4/5/6 zu.
@@ -3392,7 +3396,7 @@ function viewAllowed(v){
   if(v==="auslastung")return modOn("kapa")||modOn("releases");
   return true;
 }
-var APP_NAME="CAPLAN";
+var APP_NAME="KapazitätenPlaner";
 if(typeof window!=="undefined")window.APP_NAME=APP_NAME;
 if(typeof window!=="undefined")window.APP_VERSION=APP_VERSION;
 if(typeof window!=="undefined")window.safeNum=safeNum;
@@ -17547,7 +17551,7 @@ function Planungstool(){
             border:"1px solid "+A.border,display:"flex",alignItems:"center",justifyContent:"center",
             flexShrink:0},dangerouslySetInnerHTML:{__html:'<svg viewBox="0 0 16 16" width="19" height="19"><rect x="2" y="3" width="11" height="2.6" rx="1.3" style="fill:var(--c-text)"/><rect x="2" y="6.7" width="6" height="2.6" rx="1.3" style="fill:var(--c-mint)"/><rect x="2" y="10.4" width="9.5" height="2.6" rx="1.3" style="fill:var(--c-text-mid)"/></svg>'}}),
           sideOpen&&React.createElement("div",{style:{minWidth:0,flex:1}},
-            React.createElement("div",{style:{fontSize:"var(--fs-lg)",fontWeight:800,color:A.text,letterSpacing:0.3}},APP_NAME),
+            React.createElement("div",{style:{fontSize:"var(--fs-md)",fontWeight:800,color:A.text,letterSpacing:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},APP_NAME),
             React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textLight}},"v"+APP_VERSION)
           ),
           sideOpen&&React.createElement("button",{"data-side-toggle":"1",
