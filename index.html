@@ -2551,8 +2551,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.9.0";
+var APP_VERSION="3.9.1";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.9.1: Anzahl steht hinten bei den Stunden (Spaltenkopf und Issue-Zeile).
 // v3.9.0: Dashboard M0 -- Ueberfaellig, Startet heute und Faellig als drei Spalten, darin nach Issue gruppiert (Issue-Index bzw. V-Durchlauf; sonst "ohne Issue"). Die Saetze dazu entfallen in der Kachel, das Fenster nach der Anmeldung bleibt wie es ist.
 // v3.8.0: Zeiterfassung ausgegliedert -- der Planer laeuft ohne Modul zeit; mit ?variante=zeit startet dieselbe Datei als eigene Zeiterfassung (nur Modul zeit + Kern). Daten bleiben dieselben (gleiche Herkunft, gleiche Schluessel).
 // v3.7.0: Sprints je Team -- gemeinsamer Takt fuer alle Teams; Team = Abteilung, im Sprint-Reiter anpassbar (mitglied). Liste, Karten, Kapazitaet und Meldungen gelten fuer das gewaehlte Team; Lesekopie mit Team und teams[].
@@ -6426,9 +6427,10 @@ function HeuteBoard(p){
       var f=FARBE[sp.n?sp.sev:"info"]||FARBE.info,leer=!sp.n;
       return React.createElement("div",{key:sp.k,"data-heute-spalte":sp.k,style:{border:"1px solid "+(leer?A.border:f[0]),borderRadius:"var(--r-lg)",background:A.surface,overflow:"hidden",display:"flex",flexDirection:"column",minWidth:0}},
         React.createElement("div",{style:{display:"flex",alignItems:"baseline",gap:8,padding:"8px 12px",background:leer?A.bg:f[1]}},
-          React.createElement("span",{style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-xl)",fontWeight:700,color:leer?A.textLight:f[2]}},String(sp.n)),
           React.createElement("b",{style:{fontSize:"var(--fs-sm)",color:A.text}},sp.titel),
-          sp.n?React.createElement("span",{style:{marginLeft:"auto",fontSize:"var(--fs-xs)",color:A.textMid}},nh(sp.h)):null),
+          React.createElement("span",{"data-heute-anzahl":sp.n,style:{marginLeft:"auto",fontSize:"var(--fs-xs)",color:A.textMid,whiteSpace:"nowrap"}},
+            React.createElement("b",{style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-md)",color:leer?A.textLight:f[2]}},String(sp.n)),
+            " WI"+(sp.n?" \u00b7 "+nh(sp.h):""))),
         React.createElement("div",{style:{padding:"4px 10px 8px",maxHeight:320,overflow:"auto",flex:1}},
           leer?React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textLight,padding:"6px 2px"}},"nichts"):
           sp.gr.map(function(g){
@@ -6436,7 +6438,7 @@ function HeuteBoard(p){
               React.createElement("div",{title:g.t||"",style:{display:"flex",gap:6,alignItems:"baseline",fontSize:"var(--fs-xs)",color:A.textMid,borderBottom:"1px solid "+A.border,paddingBottom:2,marginBottom:2}},
                 React.createElement("span",{style:{fontFamily:"var(--font-mono)",fontWeight:700,color:g.iid?A.text:A.textLight,flexShrink:0}},g.iid||"ohne Issue"),
                 g.t?React.createElement("span",{style:{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},g.t):null,
-                React.createElement("span",{style:{marginLeft:"auto",flexShrink:0}},nh(g.h))),
+                React.createElement("span",{style:{marginLeft:"auto",flexShrink:0,whiteSpace:"nowrap"}},g.wis.length+" WI \u00b7 "+nh(g.h))),
               g.wis.map(function(w){
                 return React.createElement("button",{key:w.id,type:"button","data-brief-wi":w.id,title:w.id+(w.title?" \u00b7 "+w.title:""),
                   onClick:function(){if(p.onGo)p.onGo({t:"wi",id:w.id});},
