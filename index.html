@@ -2548,8 +2548,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.15.0";
+var APP_VERSION="3.15.1";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.15.1: Lesekopie wb-kapa-bc -- BCs mit Ziel, Prognose, Ampel, offenen und geschlossenen Workitems (fuer den Contribution Dialog im Buero).
 // v3.15.0: Dashboard -- M2 (Ueberlastete Tage), M4 (Faellig in 14 Tagen) und M5 (Blockiert) entfallen; dasselbe steht in M0 (Spalten und Hinweise).
 // v3.14.1: Sprint -- Ringe (FC/BC) scrollen mit (sticky); Bearbeiter-Gruppen in Sprintkarten und Sprint-Sync auf-/zuklappbar (gemerkt).
 // v3.14.0: Geschlossene Workitems zaehlen beim Fortschritt mit. Der Import legt sie getrennt ab (ptool_closed_wis: id, Titel, Stunden, Bearbeiter, BC, FC, Issue) -- nicht in der Planung. Flow (Fortschritt/Gesamt je Issue) und die Ringe im Sprint-Sync rechnen sie als erledigt ein.
@@ -8289,6 +8290,22 @@ function Planungstool(){
   }
   var sprMeld=useMemo(function(){return sprMeldungen(sprCfg,allPkgs,analysis,dateStr(new Date()),employees);},[sprCfg,allPkgs,analysis,employees]);
   var replanCount=analysis.filter(function(r){return r.status==="replan";}).length+sprMeld.length;
+  // v3.15.1: Lesekopie der BC-Lieferungen
+  useEffect(function(){
+    try{
+      var cap={};(analysis||[]).forEach(function(a){if(a&&a.pkg)cap[a.pkg.id]=a.capEnd||a.pkg.end;});
+      var zu={};(closedWis||[]).forEach(function(c){zu[c.bc]=(zu[c.bc]||0)+1;});
+      var bcs=(releases||[]).filter(function(r){return r&&r.name&&r.name!=="Sonstige";}).map(function(r){
+        var wis=(r.directPackages||[]).slice();(r.components||[]).forEach(function(c){wis=wis.concat(c.packages||[]);});
+        var offen=wis.filter(function(p){return p&&p.lcs!=="closed";}),prog="";
+        offen.forEach(function(p){var e=cap[p.id]||p.end||"";if(e>prog)prog=e;});
+        return {name:r.name,ziel:r.dueDate||"",prognose:prog,ampel:r.dueDate&&prog?bcAmpel(r.dueDate,prog):"",offen:offen.length,geschlossen:zu[r.name]||0,
+          fcs:(r.components||[]).length};
+      });
+      if(!bcs.length){localStorage.removeItem("wb-kapa-bc");return;}
+      localStorage.setItem("wb-kapa-bc",JSON.stringify({quelle:"kapazitaetenplaner",version:APP_VERSION,updated:new Date().toISOString(),bcs:bcs}));
+    }catch(e){}
+  },[releases,analysis,closedWis]);
   // v3.6.0: Lesekopie fuer das Sprint-Widget im Kontor
   useEffect(function(){
     try{
