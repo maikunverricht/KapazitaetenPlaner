@@ -2551,8 +2551,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.10.0";
+var APP_VERSION="3.10.1";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.10.1: Sprints -- voll verplante Workitems verschwinden aus der Liste (Schalter "verplante zeigen"); teilweise verplante bleiben mit Rest.
 // v3.10.0: Sprints -- Workitem-Liste nach Kalenderwoche des Planendes gruppiert (ueberfaellig zuerst, ohne Datum zuletzt); in der Gruppe nach Dringlichkeit. Kopf mit Zeitraum, Sprint, Anzahl und Stunden.
 // v3.9.1: Anzahl steht hinten bei den Stunden (Spaltenkopf und Issue-Zeile).
 // v3.9.0: Dashboard M0 -- Ueberfaellig, Startet heute und Faellig als drei Spalten, darin nach Issue gruppiert (Issue-Index bzw. V-Durchlauf; sonst "ohne Issue"). Die Saetze dazu entfallen in der Kachel, das Fenster nach der Anmeldung bleibt wie es ist.
@@ -9959,6 +9960,7 @@ function Planungstool(){
     var zu=cfg.zu||{};
     // v3.7.0: Team waehlen -- Liste, Karten und Kapazitaet nur fuer dieses Team
     var s_mg=useState(false);var mgOffen=s_mg[0],setMgOffen=s_mg[1];
+    var s_vz=useState(false);var verplZeig=s_vz[0],setVerplZeig=s_vz[1];
     var alleEmps=employees.filter(function(e){return !hiddenEmp[e.name];});
     var teams=sprTeams(cfg,alleEmps);
     var team=teams.indexOf(cfg.team)>=0?cfg.team:(selfEmp&&teams.indexOf(sprTeamVon(cfg,selfEmp))>=0?sprTeamVon(cfg,selfEmp):(teams[0]||""));
@@ -10005,11 +10007,18 @@ function Planungstool(){
       React.createElement("div",{style:{padding:30,color:A.textMid,border:"1px dashed "+A.border,borderRadius:"var(--r-lg)"}},"Lege oben fest, wann der erste Sprint beginnt und wie lang ein Sprint ist."));
     // ── Workitems nach Dringlichkeit ──
     var pkgs=allPkgs.filter(function(p){return p.lcs!=="closed"&&imTeam[p.employee]&&(canSeeAll||(selfEmp&&p.employee===selfEmp.id));}).slice().sort(function(a,b){return sprDringlich(a,b,heute);});
+    // v3.10.1: voll verplante raus
+    var vollVerplant=function(p){var r0=sprRest(p);return r0>0?verplant(p.id)>=r0:!!zu[p.id];};
+    var nVerpl=pkgs.filter(vollVerplant).length;
+    if(!verplZeig)pkgs=pkgs.filter(function(p){return !vollVerplant(p);});
     var meldIds={};sprMeld.forEach(function(m){meldIds[m.p.id]=m.grund;});
     var marke=function(p){if(p.end&&p.end<heute)return ["\u00fcberf\u00e4llig",A.coral];var l=p.fcDueDate||p.bcDueDate;if(l)return ["Lieferung "+tg(l),A.amber];if(p.lcs==="started")return ["in Arbeit",A.sky];return ["",A.textLight];};
     var liste=React.createElement("div",{"data-spr-liste":"1",style:{flex:"1 1 380px",minWidth:300,maxHeight:"70vh",overflow:"auto",border:"1px solid "+A.border,borderRadius:"var(--r-lg)",background:A.surface}},
       React.createElement("div",{style:{padding:"8px 12px",borderBottom:"1px solid "+A.border,position:"sticky",top:0,background:A.surface,zIndex:1}},
         React.createElement("b",{style:{fontSize:"var(--fs-sm)",color:A.text}},"Workitems je KW \u00b7 "+team),
+        nVerpl?React.createElement("label",{style:Object.assign({},kl,{display:"flex",gap:5,alignItems:"center",margin:"2px 0"})},
+          React.createElement("input",{type:"checkbox","data-spr-verpl":"1",checked:verplZeig,onChange:function(e){setVerplZeig(e.target.checked);}}),
+          nVerpl+" voll verplante"+(verplZeig?" werden gezeigt":" ausgeblendet \u2013 zeigen")):null,
         React.createElement("div",{style:kl},"je Kalenderwoche (Planende), darin \u00fcberf\u00e4llig \u2192 Liefertermin \u2192 in Arbeit \u2192 Plandatum \u00b7 ziehen oder antippen, dann Sprint antippen")),
       (function(){
         // v3.10.0: Gruppen nach KW des Planendes
