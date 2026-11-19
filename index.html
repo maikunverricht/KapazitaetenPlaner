@@ -2551,8 +2551,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.11.0";
+var APP_VERSION="3.12.0";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.12.0: Sprint-Sync -- Klick auf ein Workitem oeffnet daneben zwei Ringe: FC-Fortschritt (Stunden aller WIs der FC, erledigt = Plan - Rest) mit dem Status der Issues an der FC, und BC-Fortschritt.
 // v3.11.0: Sprint-Sync -- zweiter Reiter neben "Planen": voriger und aktueller Sprint nebeneinander. Je Workitem des vorigen Sprints: erledigt oder offen; offene werden in den aktuellen Sprint uebernommen (Rest) oder bewusst zurueck in die Liste gelegt (cfg.sync[nr][id]="zurueck").
 // v3.10.1: Sprints -- voll verplante Workitems verschwinden aus der Liste (Schalter "verplante zeigen"); teilweise verplante bleiben mit Rest.
 // v3.10.0: Sprints -- Workitem-Liste nach Kalenderwoche des Planendes gruppiert (ueberfaellig zuerst, ohne Datum zuletzt); in der Gruppe nach Dringlichkeit. Kopf mit Zeitraum, Sprint, Anzahl und Stunden.
@@ -9962,6 +9963,7 @@ function Planungstool(){
     var zu=cfg.zu||{};
     // v3.7.0: Team waehlen -- Liste, Karten und Kapazitaet nur fuer dieses Team
     var s_mg=useState(false);var mgOffen=s_mg[0],setMgOffen=s_mg[1];
+    var s_sw=useState("");var syncWahl=s_sw[0],setSyncWahl=s_sw[1];
     var s_rt=useState(function(){try{return localStorage.getItem("ptool_spr_reiter")||"planen";}catch(e){return "planen";}});var reiter=s_rt[0];
     function setReiter(v){s_rt[1](v);try{localStorage.setItem("ptool_spr_reiter",v);}catch(e){}}
     var s_vz=useState(false);var verplZeig=s_vz[0],setVerplZeig=s_vz[1];
@@ -10122,7 +10124,9 @@ function Planungstool(){
           if(!n.sync)n.sync={};if(!n.sync[alt.nr])n.sync[alt.nr]={};n.sync[alt.nr][id]="weiter";});}
       function zeile(id,x,rechts){var p=pkgById[id],fertig=erledigt(id),h=Number(zu[id][x.nr])||0;
         var st=fertig?["\u2713 erledigt",A.green]:p.lcs==="started"?["in Arbeit",A.sky]:p.lcs==="blocked"?["blockiert",A.coral]:["nicht begonnen",A.textLight];
-        return React.createElement("div",{key:id,"data-sync-wi":id,"data-sync-st":fertig?"erledigt":"offen",style:{display:"grid",gridTemplateColumns:"1fr auto",gap:"2px 10px",padding:"7px 12px",borderTop:"1px solid "+A.border,opacity:fertig?.75:1}},
+        var gew=syncWahl===id;
+        return React.createElement("div",{key:id,"data-sync-wi":id,"data-sync-st":fertig?"erledigt":"offen",onClick:function(e){if(e.target.closest&&e.target.closest("button"))return;setSyncWahl(gew?"":id);},
+          style:{display:"grid",gridTemplateColumns:"1fr auto",gap:"2px 10px",padding:"7px 12px",borderTop:"1px solid "+A.border,opacity:fertig?.75:1,cursor:"pointer",background:gew?A.mintLight:"transparent",boxShadow:gew?"inset 3px 0 0 "+A.mint:"none"}},
           React.createElement("div",{style:{minWidth:0}},
             React.createElement("div",{style:{display:"flex",gap:6,alignItems:"baseline",flexWrap:"wrap"}},
               React.createElement("code",{style:{fontSize:"var(--fs-2xs)",color:A.textMid}},id),
@@ -10173,7 +10177,65 @@ function Planungstool(){
         idsN.map(function(id){var aus=alt&&zu[id]&&zu[id][alt.nr]!=null;
           return zeile(id,akt,aus?React.createElement("span",{style:{fontSize:"var(--fs-2xs)",color:A.amberInk,fontWeight:700}},"aus Sprint "+alt.nr):null);}),
         !idsN.length?React.createElement("div",{style:{padding:12,color:A.textLight,fontSize:"var(--fs-xs)"}},"Noch nichts eingeplant."):null);
-      return React.createElement("div",{"data-sync":"1",style:{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-start"}},links,rechts);
+      return React.createElement("div",{"data-sync":"1",style:{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-start"}},links,rechts,syncWahl?fortschritt(syncWahl):null);
+    }
+    // ── v3.12.0: FC- und BC-Fortschritt als Ringe ──
+    function fortschritt(id){
+      var ort=null;
+      (activeReleases||[]).forEach(function(rel){
+        (rel.directPackages||[]).forEach(function(p){if(p&&p.id===id)ort={r:rel,c:null,p:p};});
+        (rel.components||[]).forEach(function(c){(c.packages||[]).forEach(function(p){if(p&&p.id===id)ort={r:rel,c:c,p:p};});});
+      });
+      var box={flex:"0 1 320px",minWidth:260,border:"1px solid "+A.border,borderRadius:"var(--r-lg)",background:A.surface,padding:"12px 14px",position:"relative"};
+      var zu2=React.createElement("button",{type:"button","data-sync-zu":"1",onClick:function(){setSyncWahl("");},title:"schlie\u00dfen",style:Object.assign({},knopf,{position:"absolute",top:8,right:8,padding:"0 7px"})},"\u2715");
+      if(!ort)return React.createElement("div",{"data-sync-ringe":id,style:box},zu2,React.createElement("div",{style:{color:A.textMid,fontSize:"var(--fs-xs)"}},id+" ist nicht mehr in den Daten."));
+      function stand(pk){var plan=0,fertig=0,n=0,z=0;
+        (pk||[]).forEach(function(p){if(!p)return;n++;var h=Number(p.hours)||0,rest=p.remainingHours!=null?Number(p.remainingHours)||0:h;
+          if(p.lcs==="closed"){z++;fertig+=h;}else fertig+=Math.max(0,h-rest);plan+=h;});
+        var q=plan>0?fertig/plan:(n?z/n:0);return {q:Math.max(0,Math.min(1,q)),plan:plan,fertig:fertig,n:n,z:z};}
+      var fcPk=ort.c?(ort.c.packages||[]):[];
+      var bcPk=(ort.r.directPackages||[]).slice();(ort.r.components||[]).forEach(function(c){bcPk=bcPk.concat(c.packages||[]);});
+      var F=ort.c?stand(fcPk):null,B=stand(bcPk);
+      function ring(q,farbe,gross,klein){var R=34,U=2*Math.PI*R;
+        return React.createElement("svg",{width:96,height:96,viewBox:"0 0 96 96",role:"img","aria-label":gross+" "+klein},
+          React.createElement("circle",{cx:48,cy:48,r:R,fill:"none",stroke:A.border,strokeWidth:9}),
+          q<=0?null:React.createElement("circle",{cx:48,cy:48,r:R,fill:"none",stroke:farbe,strokeWidth:9,strokeLinecap:q>=1?"butt":"round",
+            strokeDasharray:(U*q)+" "+U,transform:"rotate(-90 48 48)"}),
+          React.createElement("text",{x:48,y:52,textAnchor:"middle",style:{fontSize:17,fontWeight:800,fill:A.text,fontFamily:"var(--font-mono)"}},gross));}
+      // Issues an der FC: ueber die Workitems oder ueber den FC-Namen
+      var fcIds={};fcPk.forEach(function(p){if(p)fcIds[p.id]=true;});
+      var iss=[];
+      if(ort.c)Object.keys(issueIdx||{}).forEach(function(iid){var x=issueIdx[iid];
+        var hit=(x.wis||[]).some(function(w){return fcIds[w];})||(x.fcs||[]).some(function(f){return f&&(f.name===ort.c.name||(f.id&&f.id===ort.c.id));});
+        if(hit)iss.push({id:iid,t:x.t||"",l:x.l||""});});
+      var ISS_F=function(l){l=String(l||"").toLowerCase();if(/clos|done|erledigt|resolv|geschlossen|abgeschl/.test(l))return [A.green,"\u2713"];if(/block|hold/.test(l))return [A.coral,"!"];if(/progress|arbeit|open|assign|start/.test(l))return [A.sky,"\u25d0"];return [A.textLight,"\u25cb"];};
+      var pct=function(q){return Math.round(q*100)+" %";};
+      var teil=function(titel,name,S,farbe,extra){
+        return React.createElement("div",{style:{display:"flex",gap:12,alignItems:"center",padding:"8px 0",borderTop:"1px solid "+A.border}},
+          ring(S.q,farbe,pct(S.q),titel),
+          React.createElement("div",{style:{minWidth:0,flex:1}},
+            React.createElement("div",{style:kl},titel),
+            React.createElement("div",{style:{fontSize:"var(--fs-sm)",fontWeight:700,color:A.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},title:name},name),
+            React.createElement("div",{style:kl},S.z+" / "+S.n+" Workitems geschlossen \u00b7 "+nh(S.fertig)+" / "+nh(S.plan)+" h"),
+            extra||null));
+      };
+      var pTitel=(ort.p&&ort.p.title)||id;
+      return React.createElement("div",{"data-sync-ringe":id,style:box},zu2,
+        React.createElement("div",{style:{paddingRight:30,marginBottom:6}},
+          React.createElement("code",{style:{fontSize:"var(--fs-2xs)",color:A.textMid}},id),
+          React.createElement("div",{style:{fontSize:"var(--fs-sm)",fontWeight:700,color:A.text}},pTitel)),
+        F?React.createElement("div",{"data-sync-fc":"1"},teil("FC-Fortschritt",ort.c.name||"FC",F,A.mint,
+          React.createElement("div",{style:{marginTop:6}},
+            iss.length?iss.map(function(x){var f=ISS_F(x.l);
+              return React.createElement("div",{key:x.id,"data-sync-issue":x.id,title:x.t,style:{display:"flex",gap:6,alignItems:"baseline",fontSize:"var(--fs-2xs)",color:A.textMid}},
+                React.createElement("span",{style:{color:f[0],fontWeight:800,width:10}},f[1]),
+                React.createElement("code",{style:{color:A.text}},x.id),
+                React.createElement("span",{style:{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}},x.t),
+                React.createElement("span",{style:{color:f[0],fontWeight:700,flexShrink:0}},x.l||"\u2013"));}):
+            React.createElement("div",{style:kl},"Keine Issues an dieser FC bekannt.")))):
+          React.createElement("div",{style:Object.assign({},kl,{padding:"8px 0",borderTop:"1px solid "+A.border})},"Workitem h\u00e4ngt direkt am BC, ohne FC."),
+        React.createElement("div",{"data-sync-bc":"1"},teil("BC-Fortschritt",ort.r.name||"BC",B,A.sky,
+          ort.r.dueDate?React.createElement("div",{style:kl},"Ziel "+tg(ort.r.dueDate)+ort.r.dueDate.slice(2,4)):null)));
     }
   }
   function ForecastView(){
