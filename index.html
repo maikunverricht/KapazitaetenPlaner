@@ -2551,8 +2551,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.12.0";
+var APP_VERSION="3.13.0";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.13.0: Sprintkarten und Sprint-Sync -- Workitems stehen unter dem Namen ihres Bearbeiters (mit Last/Kapazitaet bzw. Stunden); erledigte ohne Bearbeiter unter "erledigt".
 // v3.12.0: Sprint-Sync -- Klick auf ein Workitem oeffnet daneben zwei Ringe: FC-Fortschritt (Stunden aller WIs der FC, erledigt = Plan - Rest) mit dem Status der Issues an der FC, und BC-Fortschritt.
 // v3.11.0: Sprint-Sync -- zweiter Reiter neben "Planen": voriger und aktueller Sprint nebeneinander. Je Workitem des vorigen Sprints: erledigt oder offen; offene werden in den aktuellen Sprint uebernommen (Rest) oder bewusst zurueck in die Liste gelegt (cfg.sync[nr][id]="zurueck").
 // v3.10.1: Sprints -- voll verplante Workitems verschwinden aus der Liste (Schalter "verplante zeigen"); teilweise verplante bleiben mit Rest.
@@ -10091,19 +10092,26 @@ function Planungstool(){
           React.createElement("div",{style:{height:8,borderRadius:4,background:A.border,margin:"8px 0 3px",overflow:"hidden"}},
             React.createElement("div",{style:{width:Math.min(100,quote*100)+"%",height:"100%",background:quote>1?A.coral:quote>0.85?A.amber:A.mint}})),
           React.createElement("div",{style:Object.assign({},kl,{marginBottom:6})},nh(last)+" h von "+nh(kap)+" h Kapazit\u00e4t \u00b7 "+ids.length+" Workitems"),
-          emps.filter(function(e){return lastJe[e.id]>0;}).map(function(e){var ue=lastJe[e.id]>kapJe[e.id];
-            return React.createElement("div",{key:e.id,style:Object.assign({},kl,{display:"flex",justifyContent:"space-between",color:ue?A.coral:A.textMid})},
-              React.createElement("span",null,e.name),React.createElement("span",null,nh(lastJe[e.id])+" / "+nh(kapJe[e.id])+" h"+(ue?" \u26a0":"")));}),
-          React.createElement("div",{style:{marginTop:6,display:"flex",flexDirection:"column",gap:3}},
-            ids.map(function(id){var p=pkgById[id];
-              return React.createElement("div",{key:id,"data-spr-im":id,onClick:function(e){e.stopPropagation();},style:{display:"flex",gap:6,alignItems:"center",fontSize:"var(--fs-xs)",color:p?A.text:A.textLight}},
-                React.createElement("span",{style:{flex:1,minWidth:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},title:(p?p.title+" \u00b7 "+empName(p.employee):"nicht mehr offen")},(p?"":"\u2713 ")+(p?p.title||id:id)),
+          (function(){
+            // v3.13.0: je Bearbeiter
+            function wiZeile(id){var p=pkgById[id];
+              return React.createElement("div",{key:id,"data-spr-im":id,onClick:function(e){e.stopPropagation();},style:{display:"flex",gap:6,alignItems:"center",fontSize:"var(--fs-xs)",color:p?A.text:A.textLight,paddingLeft:8}},
+                React.createElement("span",{style:{flex:1,minWidth:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},title:(p?id+" \u00b7 "+p.title:"nicht mehr offen")},(p?"":"\u2713 ")+(p?p.title||id:id)),
                 React.createElement("input",{type:"number",min:0,step:0.5,value:zu[id][x.nr],"data-spr-h":id+"@"+x.nr,title:"Stunden in diesem Sprint",
                   onChange:function(e){var v=Math.max(0,Number(e.target.value)||0);aendern(function(n){n.zu[id][x.nr]=v;});},style:Object.assign({},ein,{width:52})}),
                 React.createElement("span",{style:kl},"h"),
-                React.createElement("button",{type:"button","data-spr-weg":id+"@"+x.nr,title:"aus dem Sprint nehmen",onClick:function(e){e.stopPropagation();entfernen(id,x.nr);},style:Object.assign({},knopf,{padding:"0 6px"})},"\u2715"));
-            }),
-            !ids.length?React.createElement("span",{style:kl},sprWahl?"antippen, um das gew\u00e4hlte Workitem einzuplanen":"Workitems hierher ziehen"):null));
+                React.createElement("button",{type:"button","data-spr-weg":id+"@"+x.nr,title:"aus dem Sprint nehmen",onClick:function(e){e.stopPropagation();entfernen(id,x.nr);},style:Object.assign({},knopf,{padding:"0 6px"})},"\u2715"));}
+            var proMa={},ohne=[];ids.forEach(function(id){var p=pkgById[id];if(p&&lastJe[p.employee]!=null)(proMa[p.employee]=proMa[p.employee]||[]).push(id);else ohne.push(id);});
+            return React.createElement("div",{style:{marginTop:6,display:"flex",flexDirection:"column",gap:6}},
+              emps.filter(function(e){return proMa[e.id];}).map(function(e){var ue=lastJe[e.id]>kapJe[e.id];
+                return React.createElement("div",{key:e.id,"data-spr-ma":e.name,style:{display:"flex",flexDirection:"column",gap:3}},
+                  React.createElement("div",{style:{display:"flex",justifyContent:"space-between",fontSize:"var(--fs-xs)",fontWeight:700,color:ue?A.coral:A.text,borderBottom:"1px solid "+A.border,paddingBottom:2}},
+                    React.createElement("span",null,e.name),React.createElement("span",{style:{fontWeight:600,color:ue?A.coral:A.textMid}},nh(lastJe[e.id])+" / "+nh(kapJe[e.id])+" h"+(ue?" \u26a0":""))),
+                  proMa[e.id].map(wiZeile));}),
+              ohne.length?React.createElement("div",{"data-spr-ma":"erledigt",style:{display:"flex",flexDirection:"column",gap:3}},
+                React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.textMid,borderBottom:"1px solid "+A.border,paddingBottom:2}},"erledigt"),
+                ohne.map(wiZeile)):null,
+            !ids.length?React.createElement("span",{style:kl},sprWahl?"antippen, um das gew\u00e4hlte Workitem einzuplanen":"Workitems hierher ziehen"):null);})());
       }));
     if(reiter==="sync")return React.createElement("div",{style:{padding:20,overflow:"auto",flex:1,minHeight:0}},kopf,syncAnsicht());
     return React.createElement("div",{style:{padding:20,overflow:"auto",flex:1,minHeight:0}},kopf,
@@ -10122,6 +10130,18 @@ function Planungstool(){
       function uebernehmen(id){var p=pkgById[id];if(!p||!akt)return;
         aendern(function(n){if(!n.zu[id])n.zu[id]={};if(n.zu[id][akt.nr]==null){var rest=Math.max(0,sprRest(p)-Object.keys(n.zu[id]).filter(function(k){return Number(k)>alt.nr;}).reduce(function(s,k){return s+(Number(n.zu[id][k])||0);},0));n.zu[id][akt.nr]=Math.round((rest||sprRest(p))*2)/2;}
           if(!n.sync)n.sync={};if(!n.sync[alt.nr])n.sync[alt.nr]={};n.sync[alt.nr][id]="weiter";});}
+      // v3.13.0: Workitems unter ihren Bearbeitern
+      var maAlle={};(activeReleases||[]).forEach(function(rel){(rel.directPackages||[]).forEach(function(p){if(p)maAlle[p.id]=p.employee;});
+        (rel.components||[]).forEach(function(c){(c.packages||[]).forEach(function(p){if(p)maAlle[p.id]=p.employee;});});});
+      function nachMa(liste,x,fn){var G={},ord=[];
+        liste.forEach(function(id){var m=(pkgById[id]&&pkgById[id].employee)||maAlle[id]||"";if(!G[m]){G[m]=[];ord.push(m);}G[m].push(id);});
+        ord.sort(function(a,b){return (empName(a)||"\uffff").localeCompare(empName(b)||"\uffff","de");});
+        var out=[];ord.forEach(function(m){var ids=G[m],h=ids.reduce(function(s,id){return s+(Number(zu[id][x.nr])||0);},0),f=ids.filter(erledigt).length;
+          out.push(React.createElement("div",{key:"ma-"+m,"data-sync-ma":empName(m)||"ohne",style:{display:"flex",gap:8,alignItems:"baseline",padding:"5px 12px",background:A.bg,borderTop:"1px solid "+A.border}},
+            React.createElement("b",{style:{fontSize:"var(--fs-xs)",color:A.text}},empName(m)||"ohne Bearbeiter"),
+            React.createElement("span",{style:Object.assign({},kl,{marginLeft:"auto"})},f+" / "+ids.length+" erledigt \u00b7 "+nh(h)+" h")));
+          ids.forEach(function(id){out.push(fn(id));});});
+        return out;}
       function zeile(id,x,rechts){var p=pkgById[id],fertig=erledigt(id),h=Number(zu[id][x.nr])||0;
         var st=fertig?["\u2713 erledigt",A.green]:p.lcs==="started"?["in Arbeit",A.sky]:p.lcs==="blocked"?["blockiert",A.coral]:["nicht begonnen",A.textLight];
         var gew=syncWahl===id;
@@ -10132,7 +10152,7 @@ function Planungstool(){
               React.createElement("code",{style:{fontSize:"var(--fs-2xs)",color:A.textMid}},id),
               React.createElement("span",{style:{fontSize:"var(--fs-2xs)",fontWeight:700,color:st[1]}},st[0])),
             React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},p?(p.title||id):id),
-            React.createElement("div",{style:kl},(p?empName(p.employee):"")+" \u00b7 "+nh(h)+" h im Sprint"+(!fertig&&p?" \u00b7 Rest "+nh(sprRest(p))+" h":""))),
+            React.createElement("div",{style:kl},nh(h)+" h im Sprint"+(!fertig&&p?" \u00b7 Rest "+nh(sprRest(p))+" h":""))),
           React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}},rechts||null));
       }
       function kopfKarte(titel,x,ids,sub){var fertig=ids.filter(erledigt),hPlan=ids.reduce(function(s,id){return s+(Number(zu[id][x.nr])||0);},0),
@@ -10155,7 +10175,8 @@ function Planungstool(){
         var ungeklaert=offenA.filter(function(id){return !entscheid(alt.nr,id)&&!(zu[id]&&zu[id][akt.nr]!=null);});
         links=React.createElement("div",{"data-sync-alt":alt.nr,style:spalte},
           kopfKarte("Sprint "+alt.nr+" \u00b7 abgeschlossen",alt,idsA,ungeklaert.length?ungeklaert.length+" offen \u2013 weiterf\u00fchren oder zur\u00fcck in die Liste":offenA.length?"alle offenen entschieden":"alles erledigt"),
-          offenA.map(function(id){
+          nachMa(offenA.concat(fertigA),alt,function(id){
+            if(erledigt(id))return zeile(id,alt,null);
             var weiter=zu[id]&&zu[id][akt.nr]!=null,e=entscheid(alt.nr,id);
             return zeile(id,alt,weiter?React.createElement("span",{style:{fontSize:"var(--fs-2xs)",fontWeight:700,color:A.mintInk}},"\u2192 in Sprint "+akt.nr):
               e==="zurueck"?React.createElement(React.Fragment,null,
@@ -10165,7 +10186,6 @@ function Planungstool(){
                 React.createElement("button",{type:"button","data-sync-weiter":id,onClick:function(){uebernehmen(id);},style:Object.assign({},knopf,{background:A.mint,color:A.onMint,border:"none"})},"In Sprint "+akt.nr+" weiterf\u00fchren"),
                 React.createElement("button",{type:"button","data-sync-zurueck":id,onClick:function(){setEnt(alt.nr,id,"zurueck");},style:Object.assign({},knopf,{padding:"2px 8px",fontSize:"var(--fs-2xs)"})},"zur\u00fcck in die Liste")));
           }),
-          fertigA.map(function(id){return zeile(id,alt,null);}),
           !idsA.length?React.createElement("div",{style:{padding:12,color:A.textLight,fontSize:"var(--fs-xs)"}},"In diesem Sprint war f\u00fcr "+team+" nichts eingeplant."):null);
       }
       // Aktueller Sprint
@@ -10174,7 +10194,7 @@ function Planungstool(){
       idsN.sort(function(a,b){return rang(a)-rang(b);});
       var rechts=React.createElement("div",{"data-sync-akt":akt.nr,style:spalte},
         kopfKarte("Sprint "+akt.nr+(akt.start<=heute?" \u00b7 l\u00e4uft":" \u00b7 beginnt "+tg(akt.start)),akt,idsN,null),
-        idsN.map(function(id){var aus=alt&&zu[id]&&zu[id][alt.nr]!=null;
+        nachMa(idsN,akt,function(id){var aus=alt&&zu[id]&&zu[id][alt.nr]!=null;
           return zeile(id,akt,aus?React.createElement("span",{style:{fontSize:"var(--fs-2xs)",color:A.amberInk,fontWeight:700}},"aus Sprint "+alt.nr):null);}),
         !idsN.length?React.createElement("div",{style:{padding:12,color:A.textLight,fontSize:"var(--fs-xs)"}},"Noch nichts eingeplant."):null);
       return React.createElement("div",{"data-sync":"1",style:{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-start"}},links,rechts,syncWahl?fortschritt(syncWahl):null);
