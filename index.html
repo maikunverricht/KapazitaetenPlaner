@@ -2551,8 +2551,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.7.0";
+var APP_VERSION="3.8.0";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.8.0: Zeiterfassung ausgegliedert -- der Planer laeuft ohne Modul zeit; mit ?variante=zeit startet dieselbe Datei als eigene Zeiterfassung (nur Modul zeit + Kern). Daten bleiben dieselben (gleiche Herkunft, gleiche Schluessel).
 // v3.7.0: Sprints je Team -- gemeinsamer Takt fuer alle Teams; Team = Abteilung, im Sprint-Reiter anpassbar (mitglied). Liste, Karten, Kapazitaet und Meldungen gelten fuer das gewaehlte Team; Lesekopie mit Team und teams[].
 // v3.6.0: Sprints -- Team-Sprints mit festen Zeiten, Workitems nach Dringlichkeit in Sprints einplanen (auch ueber mehrere Sprints); Workitems im Sprintzeitraum ausserhalb des Sprints melden sich in der Umplanung. Lesekopie wb-kapazitaetenplaner-sprint fuer das Kontor-Widget.
 // v3.5.1: Review-Anteil im Schritt einstellbar (vlauf.review, Standard 20 %).
@@ -3344,7 +3345,11 @@ var MODULES=[
   {key:"report",   label:"Report"},
   {key:"vision",   label:"Vision"}
 ];
-var MODULES_ON=["zeit","kapa","releases","report","vision"];
+// v3.8.0: Zeiterfassung ist ein eigenes Werkzeug (Kontor-Kachel "Zeiterfassung").
+var KP_VARIANTE=(function(){try{return new URLSearchParams(location.search).get("variante")||"";}catch(e){return "";}})();
+var MODULES_ON=KP_VARIANTE==="zeit"?["zeit"]:["kapa","releases","report","vision"];
+var VIEW_LS=KP_VARIANTE==="zeit"?"ptool_view_zeit":"ptool_view";
+if(KP_VARIANTE==="zeit"){try{document.title="Zeiterfassung";}catch(e){}}
 function modOn(k){return MODULES_ON.indexOf(k)>=0;}
 
 // Welche Ansicht gehoert zu welchem Modul? Ansichten ohne Eintrag sind Kern
@@ -3357,7 +3362,9 @@ var VIEW_MODULE={
   szenarien:"vision",
   flow:"vision",
   planist:"report",
-  report:"report"
+  report:"report",
+  sprints:"vision",
+  forecast:"kapa"
 };
 // v3.4.0 (Maik, 18.11.2026): Szenarien vorerst dauerhaft ausgeblendet. Ansicht,
 // Navigation und aktives Szenario sind aus; gespeicherte Szenarien bleiben liegen.
@@ -6932,7 +6939,7 @@ function Planungstool(){
   // v2.38.0: Zuweisung von stateRef.current erfolgt weiter unten, NACH allen
   // useState-Deklarationen — siehe Warnkommentar dort (v2.20.11-Muster!)
   var stateRef=useRef({});
-  var s_view=useState(function(){return lsLoad("ptool_view","auslastung");});
+  var s_view=useState(function(){return lsLoad(VIEW_LS,KP_VARIANTE==="zeit"?"zeit":"auslastung");});
   var view=s_view[0],setView=s_view[1];
   var s_zoom=useState(function(){return lsLoad("ptool_zoom","week");}); var zoom=s_zoom[0],setZoom=s_zoom[1];
   var s_rangeStart=useState(function(){return lsLoad("ptool_range_start","");});
@@ -7481,7 +7488,7 @@ function Planungstool(){
     }
     function saveAll(){
       var s=stateRef.current;
-      saveOne("ptool_view",s.view);
+      saveOne(VIEW_LS,s.view);
       saveOne("ptool_zoom",s.zoom);
       saveOne("ptool_hidden_rel",s.hiddenRel);
       saveOne("ptool_hidden_emp",s.hiddenEmp);
