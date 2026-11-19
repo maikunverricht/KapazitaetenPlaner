@@ -2551,8 +2551,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.9.1";
+var APP_VERSION="3.10.0";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.10.0: Sprints -- Workitem-Liste nach Kalenderwoche des Planendes gruppiert (ueberfaellig zuerst, ohne Datum zuletzt); in der Gruppe nach Dringlichkeit. Kopf mit Zeitraum, Sprint, Anzahl und Stunden.
 // v3.9.1: Anzahl steht hinten bei den Stunden (Spaltenkopf und Issue-Zeile).
 // v3.9.0: Dashboard M0 -- Ueberfaellig, Startet heute und Faellig als drei Spalten, darin nach Issue gruppiert (Issue-Index bzw. V-Durchlauf; sonst "ohne Issue"). Die Saetze dazu entfallen in der Kachel, das Fenster nach der Anmeldung bleibt wie es ist.
 // v3.8.0: Zeiterfassung ausgegliedert -- der Planer laeuft ohne Modul zeit; mit ?variante=zeit startet dieselbe Datei als eigene Zeiterfassung (nur Modul zeit + Kern). Daten bleiben dieselben (gleiche Herkunft, gleiche Schluessel).
@@ -10008,9 +10009,30 @@ function Planungstool(){
     var marke=function(p){if(p.end&&p.end<heute)return ["\u00fcberf\u00e4llig",A.coral];var l=p.fcDueDate||p.bcDueDate;if(l)return ["Lieferung "+tg(l),A.amber];if(p.lcs==="started")return ["in Arbeit",A.sky];return ["",A.textLight];};
     var liste=React.createElement("div",{"data-spr-liste":"1",style:{flex:"1 1 380px",minWidth:300,maxHeight:"70vh",overflow:"auto",border:"1px solid "+A.border,borderRadius:"var(--r-lg)",background:A.surface}},
       React.createElement("div",{style:{padding:"8px 12px",borderBottom:"1px solid "+A.border,position:"sticky",top:0,background:A.surface,zIndex:1}},
-        React.createElement("b",{style:{fontSize:"var(--fs-sm)",color:A.text}},"Workitems nach Dringlichkeit \u00b7 "+team),
-        React.createElement("div",{style:kl},"\u00fcberf\u00e4llig \u2192 n\u00e4chster Liefertermin \u2192 in Arbeit \u2192 Plandatum \u00b7 ziehen oder antippen, dann Sprint antippen")),
-      pkgs.map(function(p){
+        React.createElement("b",{style:{fontSize:"var(--fs-sm)",color:A.text}},"Workitems je KW \u00b7 "+team),
+        React.createElement("div",{style:kl},"je Kalenderwoche (Planende), darin \u00fcberf\u00e4llig \u2192 Liefertermin \u2192 in Arbeit \u2192 Plandatum \u00b7 ziehen oder antippen, dann Sprint antippen")),
+      (function(){
+        // v3.10.0: Gruppen nach KW des Planendes
+        var G={},ord=[];
+        pkgs.forEach(function(p){
+          var k,lab,von="",bis="";
+          if(p.end&&p.end<heute){k="0";lab="\u00dcberf\u00e4llig";}
+          else if(!p.end){k="9";lab="Ohne Plandatum";}
+          else{var d=new Date(p.end+"T00:00:00"),mo=new Date(d);mo.setDate(d.getDate()-((d.getDay()+6)%7));
+            von=dateStr(mo);bis=sprTag(von,6);var kw=isoWeek(d),jahr=new Date(sprTag(von,3)+"T00:00:00").getFullYear();
+            k="1"+jahr+(kw<10?"0":"")+kw;lab="KW "+kw+(jahr!==new Date(heute+"T00:00:00").getFullYear()?" / "+jahr:"");}
+          if(!G[k]){G[k]={k:k,lab:lab,von:von,bis:bis,ps:[],h:0};ord.push(k);}
+          G[k].ps.push(p);G[k].h+=sprRest(p);
+        });
+        ord.sort();
+        return ord.map(function(k){var g=G[k];
+          var spr=g.von?L.filter(function(x){return x.start<=g.bis&&x.ende>=g.von;}).map(function(x){return "S"+x.nr;}).join("/"):"";
+          var dieseKw=g.von&&g.von<=heute&&heute<=g.bis;
+          return [React.createElement("div",{key:"kw"+k,"data-spr-kw":g.lab,style:{display:"flex",gap:8,alignItems:"baseline",padding:"5px 12px",background:k==="0"?A.coralLight:dieseKw?A.mintLight:A.bg,borderBottom:"1px solid "+A.border}},
+            React.createElement("b",{style:{fontSize:"var(--fs-xs)",color:k==="0"?A.coralInk:A.text}},g.lab+(dieseKw?" \u00b7 diese Woche":"")),
+            g.von?React.createElement("span",{style:kl},tg(g.von)+"\u2013"+tg(g.bis)+(spr?" \u00b7 "+spr:"")):null,
+            React.createElement("span",{style:Object.assign({},kl,{marginLeft:"auto",whiteSpace:"nowrap"})},g.ps.length+" WI \u00b7 "+nh(g.h)+" h"))]
+          .concat(g.ps.map(function(p){
         var r=sprRest(p),v=verplant(p.id),m=marke(p),gew=sprWahl===p.id,sp=Object.keys(zu[p.id]||{}).sort(function(a,b){return a-b;});
         return React.createElement("div",{key:p.id,"data-spr-wi":p.id,draggable:true,
           onDragStart:function(e){e.dataTransfer.effectAllowed="copy";e.dataTransfer.setData("text/plain","spr:"+p.id);},
@@ -10027,7 +10049,7 @@ function Planungstool(){
             React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.text}},nh(r)+" h"),
             React.createElement("div",{style:Object.assign({},kl,{color:v>=r&&r>0?A.green:v>0?A.amber:A.textLight})},v?(v>=r?"verplant":nh(r-v)+" h offen"):"nicht im Sprint"),
             sp.length?React.createElement("div",{style:kl},sp.map(function(n){return "S"+n;}).join(" \u00b7 ")):null));
-      }));
+      }));});})());
     // ── Sprints ──
     var karten=React.createElement("div",{style:{flex:"2 1 520px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12,alignContent:"start"}},
       sichtbar.map(function(x){
