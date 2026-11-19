@@ -2555,7 +2555,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.20.0";
+var APP_VERSION="3.21.0";
+// v3.21.0: Testfaelle links im V (Maik): SWE.1 ist erst gruen, wenn jede L2/L3/L4 des Auftrags im TestcaseManager einen Testfall ihrer Ebene hat (spezifiziert genuegt); Anzeige "Testfaelle x/y" am Schritt.
 // v3.20.0: Planer- vs. CQ-Workitems (Maik): Solange es kein CQ-Workitem gibt, gelten die vom Planer; ein CQ-Workitem ersetzt die offenen Planer-Workitems seines Schritts (gleiche Rolle). Nach jedem Import automatisch, Schritt aus dem Titel (SWE.1-6); nicht Erkanntes bleibt zum Ziehen. Von Hand geloeste Zuordnungen bleiben geloest.
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
 // v3.19.0: Navigation gebuendelt (Design-Check Massnahme 5): "Handlungsbedarf" = Umplanung + Konflikte, "Auslastung" = heute + Prognose (Forecast); je ein Umschalter ueber dem Inhalt. Ansichtsschluessel bleiben.
@@ -4949,6 +4950,16 @@ function vlErgebnisse(iid){
     out["SWE.1"]="L1 "+(au.l1||[]).length+(offen?" ("+offen+" offen)":"")+" \u00b7 L2 "+n[2]+" \u00b7 L3 "+n[3]+" \u00b7 L4 "+n[4];
     (au.l1||[]).forEach(function(x){ids[x.id]=1;});(au.reqs||[]).forEach(function(r){ids[r.id]=1;});
   }
+  // v3.21.0 (Maik): Testfaelle entstehen links -- jede L2/L3/L4 braucht einen Testfall ihrer Ebene (L2 sys, L3 cl, L4 kom), ausgefuehrt oder nur spezifiziert
+  if(au){
+    var ts=(tc&&Array.isArray(tc.tests))?tc.tests:[],EB={2:"sys",3:"cl",4:"kom"};
+    var rq=(au.reqs||[]).filter(function(r){return EB[r.ebene];});
+    if(rq.length){
+      var mit=rq.filter(function(r){return ts.some(function(t){return t.ebene===EB[r.ebene]&&(t.reqs||[]).indexOf(r.id)>=0;});}).length;
+      out["SWE.1"]+=" \u00b7 Testf\u00e4lle "+mit+"/"+rq.length;
+      out._s={n:rq.length,mit:mit};
+    }
+  }
   if(fe&&fe.auftrag===iid&&Array.isArray(fe.geaendert))out["SWE.3"]=fe.geaendert.length+" Funktion"+(fe.geaendert.length===1?"":"en")+" ge\u00e4ndert";
   if(tc&&Array.isArray(tc.tests)&&Object.keys(ids).length){
     [["SWE.4","kom"],["SWE.5","cl"],["SWE.6","sys"]].forEach(function(z){
@@ -4992,6 +5003,9 @@ function vlLesekopie(vl,idx,rels,emps,angemeldet){
       });
       // v3.16.0: Testschritte -- Status auch aus den Testergebnissen
       var tst=(vlErgebnisse(iid)._t)||{};
+      // v3.21.0: SWE.1 erst gruen, wenn jede L2-L4 einen Testfall hat (spezifiziert genuegt)
+      var erg=vlErgebnisse(iid),sp=erg._s,z1=sch["SWE.1"];
+      if(sp&&z1){z1.testfaelle={n:sp.n,mit:sp.mit};if(z1.status==="closed"&&sp.mit<sp.n)z1.status="started";}
       ["SWE.4","SWE.5","SWE.6"].forEach(function(k){var t=tst[k],z=sch[k];if(!t||!z)return;
         z.tests={n:t.n,bestanden:t.ok,fehler:t.f};
         if(t.f>0)z.status="blocked";
