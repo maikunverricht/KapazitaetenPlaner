@@ -2548,8 +2548,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.15.1";
+var APP_VERSION="3.16.0";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.16.0: Test als Arbeitsschritt -- (1) Ein Testschritt SWE.4-6 ist erst gruen, wenn seine Workitems geschlossen UND die Tests im TestcaseManager bestanden sind; Fehlschlag = blockiert, offene Tests = in Arbeit. (2) "Testschritte erkennen" ordnet ClearQuest-Workitems nach dem Titel SWE.4/5/6 zu.
 // v3.15.1: Lesekopie wb-kapa-bc -- BCs mit Ziel, Prognose, Ampel, offenen und geschlossenen Workitems (fuer den Contribution Dialog im Buero).
 // v3.15.0: Dashboard -- M2 (Ueberlastete Tage), M4 (Faellig in 14 Tagen) und M5 (Blockiert) entfallen; dasselbe steht in M0 (Spalten und Hinweise).
 // v3.14.1: Sprint -- Ringe (FC/BC) scrollen mit (sticky); Bearbeiter-Gruppen in Sprintkarten und Sprint-Sync auf-/zuklappbar (gemerkt).
@@ -4821,6 +4822,12 @@ function sprMeldungen(cfg,pkgs,analysis,heute,emps){
   });
   return out;}
 function vlHaupt(ws){var b=null;(ws||[]).forEach(function(w){if(w.ma&&(!b||(Number(w.h)||0)>(Number(b.h)||0)))b=w;});return b?b.ma:"";}
+// v3.16.0: Testschritt aus dem Workitem-Titel
+function vlTestSchritt(t){t=String(t||"");
+  if(/weak\s*-?\s*spot|unit\s*-?\s*test|modul\s*-?\s*test|komponenten\s*-?\s*test|SWE\.?\s*4/i.test(t))return "SWE.4";
+  if(/integrations?\s*-?\s*test|cluster\s*-?\s*test|SWE\.?\s*5/i.test(t))return "SWE.5";
+  if(/qualifi|system\s*-?\s*test|abnahme|SWE\.?\s*6/i.test(t))return "SWE.6";
+  return "";}
 function vlSchrittStatus(ws){
   if(!ws.length)return "";
   if(ws.every(function(w){return w.lcs==="closed";}))return "closed";
@@ -4926,6 +4933,7 @@ function vlErgebnisse(iid){
       if(!t.length)return;
       var ok=t.filter(function(x){return x.res==="pass";}).length,f=t.filter(function(x){return x.res==="fail";}).length;
       out[z[0]]="Tests "+ok+"/"+t.length+(f?" \u00b7 "+f+" \u2717":"");
+      (out._t=out._t||{})[z[0]]={n:t.length,ok:ok,f:f}; // v3.16.0
     });
   }
   return out;
@@ -4959,6 +4967,12 @@ function vlLesekopie(vl,idx,rels,emps,angemeldet){
           // v3.5.0: im Kontor aussen der Entwickler, innen der Reviewer (je der mit dem meisten Aufwand)
           entwickler:vlHaupt(ws.filter(function(w){return !vlIstReview(w);})),reviewer:vlHaupt(ws.filter(vlIstReview))};
       });
+      // v3.16.0: Testschritte -- Status auch aus den Testergebnissen
+      var tst=(vlErgebnisse(iid)._t)||{};
+      ["SWE.4","SWE.5","SWE.6"].forEach(function(k){var t=tst[k],z=sch[k];if(!t||!z)return;
+        z.tests={n:t.n,bestanden:t.ok,fehler:t.f};
+        if(t.f>0)z.status="blocked";
+        else if(z.status==="closed"&&t.ok<t.n)z.status="started";});
       // ClearQuest-Workitems des Issues (ohne die eigenen V-Workitems)
       var cq=(x.wis||[]).filter(function(id){return !(a.wis&&a.wis[id]);}).map(function(id){return pk[id];}).filter(Boolean);
       cq.forEach(function(p){dabei(nameById[p.employee]);});
@@ -15267,7 +15281,12 @@ function Planungstool(){
           onClick:function(){vlAendern(function(n){vlPlanenIn(n,iid,true);});}},"Alles neu planen")));
     // ── v3.4.0: vorhandene ClearQuest-Workitems des Issues ──
     var cqTabelle=cqAlle.length?React.createElement("div",{"data-vl-cq":iid,style:{marginTop:10}},
-      React.createElement("div",{style:Object.assign({},klein,{fontWeight:700,marginBottom:4})},"Workitems aus ClearQuest \u00b7 einem Prozessschritt zuordnen (ersetzt die hier angelegten desselben Bearbeiters)"),
+      React.createElement("div",{style:{display:"flex",gap:10,alignItems:"center",marginBottom:4,flexWrap:"wrap"}},
+        React.createElement("div",{style:Object.assign({},klein,{fontWeight:700})},"Workitems aus ClearQuest \u00b7 einem Prozessschritt zuordnen (ersetzt die hier angelegten desselben Bearbeiters)"),
+        (function(){var vor=cqAlle.filter(function(p){return !(a&&a.cq&&a.cq[p.id])&&vlTestSchritt(p.title);});
+          return vor.length&&darf?React.createElement("button",{type:"button","data-vl-test-erkennen":iid,style:knopf,
+            title:vor.map(function(p){return p.id+" \u2192 "+vlTestSchritt(p.title);}).join("\n"),
+            onClick:function(){vor.forEach(function(p){vlCqZuordnen(iid,p.id,vlTestSchritt(p.title));});}},"Testschritte erkennen ("+vor.length+")"):null;})()),
       React.createElement("table",{style:{borderCollapse:"collapse",minWidth:760}},
         React.createElement("thead",null,React.createElement("tr",null,th("Workitem"),th("Titel"),th("Bearbeiter"),th("Rest"),th("Start"),th("Plandatum"),th("Status"),th("Schritt"))),
         React.createElement("tbody",null,cqAlle.map(function(p){
