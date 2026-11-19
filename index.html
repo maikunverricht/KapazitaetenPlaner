@@ -2555,8 +2555,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.17.2";
+var APP_VERSION="3.17.3";
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
+// v3.17.3: Bedienelemente im Flow benannt (Schritt-Auswahl, Aufwand, Ordner).
 // v3.17.2: Name wie im Kontor: KapazitaetenPlaner statt CAPLAN (Design-Check Massnahme 3).
 // v3.17.1: Lesbarkeit (Design-Check): gedaempfte Textfarbe dunkler, Schriftstufen micro 10, 2xs 11, xs 12, sm 12.5, md 13 px; Klickziele mind. 24 px.
 // v3.17.0: Prozessmarke (WBMarke) ueber dem Inhalt: Schritt "0 Einplanen", aktives Issue, Status, weiter zu (1). In der Zeiterfassung nicht.
@@ -15263,11 +15264,11 @@ function Planungstool(){
     var kopf=React.createElement("div",{style:{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:8}},
       React.createElement("b",{style:{fontSize:"var(--fs-sm)",color:A.text}},"V-Durchlauf"),
       React.createElement("label",{style:Object.assign({},klein,{display:"inline-flex",gap:5,alignItems:"center"})},"Auftragsaufwand",
-        React.createElement("input",{type:"number",min:0,step:1,"data-vl-aufwand":iid,value:a?a.aufwand:(x.e||VL_AUFWAND_STD),
+        React.createElement("input",{type:"number",min:0,step:1,"data-vl-aufwand":iid,"aria-label":"Auftragsaufwand in Stunden",value:a?a.aufwand:(x.e||VL_AUFWAND_STD),
           onChange:function(e){var v=Math.max(0,Number(e.target.value)||0);vlAendern(function(n){var aa=vlAnlegen(n,iid);aa.aufwand=v;VL_SCHRITTE.forEach(function(s){vlVerteilen(n,aa,s.k);});});},
           style:Object.assign({},eingabe,{width:64})}),"h"),
       React.createElement("label",{style:Object.assign({},klein,{display:"inline-flex",gap:5,alignItems:"center"})},"Ordner",
-        React.createElement("input",{type:"text",value:link,"data-vl-ordner":iid,placeholder:"SharePoint-URL oder \\\\server\\…",
+        React.createElement("input",{type:"text",value:link,"data-vl-ordner":iid,"aria-label":"Auftragsordner",placeholder:"SharePoint-URL oder \\\\server\\…",
           onChange:function(e){var v=e.target.value;vlAendern(function(n){vlAnlegen(n,iid).ordner.link=v;});},
           style:Object.assign({},eingabe,{width:240})}),
         link?(istWeb?React.createElement("a",{href:link,target:"_blank",rel:"noopener",style:Object.assign({},knopf,{textDecoration:"none"})},"öffnen ↗")
@@ -15306,7 +15307,7 @@ function Planungstool(){
             td(React.createElement("span",{title:p.title,style:{display:"inline-block",maxWidth:260,overflow:"hidden",textOverflow:"ellipsis",verticalAlign:"bottom"}},p.title||"\u2013")),
             td(em?React.createElement("span",{style:{display:"inline-flex",gap:5,alignItems:"center"}},vlAvatar(em.name,18,{}),vlName(em.name)):"\u2013"),
             td((p.remainingHours!=null?p.remainingHours:p.hours||0)+" h"),td(p.start||"\u2013"),td(p.end||"\u2013"),td(statusText[lc]||lc),
-            td(React.createElement("select",{value:zu,"data-vl-cq-schritt":p.id,disabled:!darf,
+            td(React.createElement("select",{value:zu,"data-vl-cq-schritt":p.id,disabled:!darf,"aria-label":"Prozessschritt für "+p.id,
               onChange:function(e){vlCqZuordnen(iid,p.id,e.target.value);},style:eingabe},
               [React.createElement("option",{key:"",value:""},"\u2013")].concat(VL_SCHRITTE.map(function(s){return React.createElement("option",{key:s.k,value:s.k},s.k==="EIN"||s.k==="ABS"?s.n:s.k+" \u00b7 "+s.n);})))));
         })))):null;
@@ -18459,6 +18460,7 @@ setTimeout(function(){ var l=document.getElementById("loading"); if(l)l.remove()
       if (ak && ak.id && kp && Array.isArray(kp.auftraege)) au = kp.auftraege.filter(function(a){ return a.id === ak.id; })[0] || null;
       if (au && s.kp && au.schritte && au.schritte[s.kp]) st = au.schritte[s.kp].status || '';
       var w = WEITER[k] && S[WEITER[k]], f = FARBE[st];
+      el.setAttribute('aria-label', 'Prozessschritt ' + marke(s));
       var key = [k, ak && ak.id, ak && ak.titel, st, w && w.name].join('|'); if (key === letzt) return; letzt = key;
       var href = w && w.id && REPO[w.id] ? '../' + REPO[w.id] + '/' + (w.id === 'anforderungsbuch' && w.tab ? '#' + w.tab : '') : '';
       el.innerHTML =
