@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.29.1";
+var APP_VERSION="3.30.0";
+// v3.30.0: Sprintplanung -- mehrere Workitems auf einmal einplanen (Maik): Antippen sammelt, "alle waehlen" je Bearbeiterblock, Ziehen eines gewaehlten zieht alle, Sprint antippen plant alle ein.
 // v3.29.1: Fix -- Sprints der Gruppen (takte) wurden beim Laden verworfen.
 // v3.29.0: Sprints -- Restaufwand: Last rechnet offene WIs hoechstens mit aktuellem Rest, Hinweis + "an Rest anpassen"; Gruppen zuklappbar, Einzelteams nur beim Ausklappen, dort aus der Gruppe nehmen (Maik).
 // v3.28.0: Sprintplanung -- Workitem-Liste je KW nach Bearbeiter gruppiert und zuklappbar (Maik).
@@ -10179,6 +10180,10 @@ function Planungstool(){
       aendern(function(n){if(!n.zu[id])n.zu[id]={};if(n.zu[id][nr]!=null)return;
         var r=Math.max(0,sprRest(p)-verplant(id,nr));n.zu[id][nr]=Math.round((r>0?r:sprRest(p))*2)/2;});
       setSprWahl(null);}
+    var wahlL=Array.isArray(sprWahl)?sprWahl.filter(function(id){return !!pkgById[id];}):(sprWahl?[sprWahl]:[]);
+    function wahlUm(ids){var l=wahlL.slice(),alle=ids.every(function(id){return l.indexOf(id)>=0;});
+      ids.forEach(function(id){var i=l.indexOf(id);if(alle){if(i>=0)l.splice(i,1);}else if(i<0)l.push(id);});setSprWahl(l.length?l:null);}
+    function einplanenAlle(ids,nr){ids.forEach(function(id){if(pkgById[id])einplanen(id,nr);});setSprWahl(null);}
     function entfernen(id,nr){aendern(function(n){if(n.zu[id]){delete n.zu[id][nr];if(!Object.keys(n.zu[id]).length)delete n.zu[id];}});}
     // ── Kopf: Sprintzeiten ──
     var reiterLeiste=React.createElement("div",{"data-spr-reiter":reiter,style:{display:"inline-flex",border:"1px solid "+A.border,borderRadius:"var(--r-md)",overflow:"hidden"}},
@@ -10247,7 +10252,10 @@ function Planungstool(){
         nVerpl?React.createElement("label",{style:Object.assign({},kl,{display:"flex",gap:5,alignItems:"center",margin:"2px 0"})},
           React.createElement("input",{type:"checkbox","data-spr-verpl":"1",checked:verplZeig,onChange:function(e){setVerplZeig(e.target.checked);}}),
           nVerpl+" voll verplante"+(verplZeig?" werden gezeigt":" ausgeblendet \u2013 zeigen")):null,
-        React.createElement("div",{style:kl},"je Kalenderwoche (Planende), darin \u00fcberf\u00e4llig \u2192 Liefertermin \u2192 in Arbeit \u2192 Plandatum \u00b7 ziehen oder antippen, dann Sprint antippen")),
+        React.createElement("div",{style:kl},"je Kalenderwoche (Planende), darin \u00fcberf\u00e4llig \u2192 Liefertermin \u2192 in Arbeit \u2192 Plandatum \u00b7 ziehen oder antippen (mehrere m\u00f6glich), dann Sprint antippen"),
+        wahlL.length?React.createElement("div",{"data-spr-auswahl":wahlL.length,role:"status",style:{display:"flex",gap:8,alignItems:"center",marginTop:6,padding:"4px 8px",borderRadius:"var(--r-md)",background:A.mintLight,color:A.mintInk,fontSize:"var(--fs-xs)",fontWeight:700}},
+          wahlL.length+(wahlL.length===1?" Workitem":" Workitems")+" gew\u00e4hlt \u00b7 "+nh(wahlL.reduce(function(a,id){return a+sprRest(pkgById[id]);},0))+" h \u2013 Sprint antippen oder ziehen",
+          React.createElement("button",{type:"button","data-spr-auswahl-weg":"1",onClick:function(){setSprWahl(null);},style:Object.assign({},knopf,{marginLeft:"auto",padding:"0 8px"})},"Auswahl aufheben")):null),
       (function(){
         // v3.10.0: Gruppen nach KW des Planendes
         var G={},ord=[];
@@ -10277,15 +10285,21 @@ function Planungstool(){
               var kopfMa=React.createElement("button",{key:"ma"+k+m,type:"button","data-spr-kw-ma":empName(m)||"ohne",onClick:function(){klapp(kk);},"aria-expanded":auf?"true":"false",
                 style:{display:"flex",gap:6,alignItems:"baseline",width:"100%",padding:"4px 12px 4px 16px",border:"none",borderBottom:"1px solid "+A.border,background:"transparent",cursor:"pointer",textAlign:"left",color:A.text,fontSize:"var(--fs-xs)"}},
                 pfeil(kk),React.createElement("b",null,empName(m)||"ohne Bearbeiter"),
+                React.createElement("span",{role:"button",tabIndex:0,"data-spr-kw-ma-alle":k+"|"+m,title:"alle Workitems dieses Blocks ausw\u00e4hlen",
+                  onClick:function(e){e.stopPropagation();wahlUm(B.ps.map(function(p){return p.id;}));},
+                  onKeyDown:function(e){if(e.key==="Enter"||e.key===" "){e.preventDefault();e.stopPropagation();wahlUm(B.ps.map(function(p){return p.id;}));}},
+                  style:{fontSize:"var(--fs-2xs)",color:A.mintInk,border:"1px solid "+A.border,borderRadius:999,padding:"0 6px",marginLeft:4}},
+                  B.ps.every(function(p){return wahlL.indexOf(p.id)>=0;})?"abw\u00e4hlen":"alle w\u00e4hlen"),
                 mehrT?React.createElement("span",{style:kl},sprTeamVon(cfg,employees.find(function(x){return x.id===m;}))):null,
                 React.createElement("span",{style:Object.assign({},kl,{marginLeft:"auto",whiteSpace:"nowrap"})},B.ps.length+" WI \u00b7 "+nh(B.h)+" h"));
               return [kopfMa].concat(auf?B.ps.map(zeileWi):[]);});
           })().reduce(function(a,b){return a.concat(b);},[]));});})());
     function zeileWi(p){
-        var r=sprRest(p),v=verplant(p.id),m=marke(p),gew=sprWahl===p.id,sp=Object.keys(zu[p.id]||{}).sort(function(a,b){return a-b;});
+        var r=sprRest(p),v=verplant(p.id),m=marke(p),gew=wahlL.indexOf(p.id)>=0,sp=Object.keys(zu[p.id]||{}).sort(function(a,b){return a-b;});
         return React.createElement("div",{key:p.id,"data-spr-wi":p.id,draggable:true,
-          onDragStart:function(e){e.dataTransfer.effectAllowed="copy";e.dataTransfer.setData("text/plain","spr:"+p.id);},
-          onClick:function(){setSprWahl(gew?null:p.id);},
+          // v3.30.0 (Maik): mehrere Workitems -- Antippen sammelt eine Auswahl, Ziehen eines gewaehlten zieht alle
+          onDragStart:function(e){e.dataTransfer.effectAllowed="copy";e.dataTransfer.setData("text/plain","spr:"+(gew?wahlL:[p.id]).join(","));},
+          onClick:function(){wahlUm([p.id]);},"aria-pressed":gew?"true":"false",
           style:{padding:"7px 12px",borderBottom:"1px solid "+A.border,cursor:"grab",background:gew?A.mintLight:"transparent",display:"grid",gridTemplateColumns:"1fr auto",gap:"2px 10px"}},
           React.createElement("div",{style:{minWidth:0}},
             React.createElement("div",{style:{display:"flex",gap:6,alignItems:"baseline",flexWrap:"wrap"}},
@@ -10327,8 +10341,8 @@ function Planungstool(){
         var kap=emps.reduce(function(s,e){return s+kapJe[e.id];},0),last=ids.reduce(function(s,id){return s+effVon(id,x.nr);},0);
         var aktiv=x.start<=heute&&heute<=x.ende,vorbei=x.ende<heute,quote=kap?last/kap:0;
         return React.createElement("div",{key:x.nr,"data-spr-sprint":x.nr,
-          onDragOver:function(e){e.preventDefault();},onDrop:function(e){e.preventDefault();var t=e.dataTransfer.getData("text/plain")||"";if(t.indexOf("spr:")===0)einplanen(t.slice(4),x.nr);},
-          onClick:function(){if(sprWahl)einplanen(sprWahl,x.nr);},
+          onDragOver:function(e){e.preventDefault();},onDrop:function(e){e.preventDefault();var t=e.dataTransfer.getData("text/plain")||"";if(t.indexOf("spr:")===0)einplanenAlle(t.slice(4).split(","),x.nr);},
+          onClick:function(){if(wahlL.length)einplanenAlle(wahlL,x.nr);},
           style:{border:(sprWahl?"1.5px dashed "+A.mint:"1px solid "+(aktiv?A.mint:A.border)),borderRadius:"var(--r-lg)",background:A.surface,padding:"10px 12px",opacity:vorbei?.7:1,cursor:sprWahl?"copy":"default"}},
           React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:6}},
             React.createElement("b",{style:{color:A.text}},"Sprint "+x.nr+(aktiv?" \u00b7 l\u00e4uft":vorbei?" \u00b7 vorbei":"")),
@@ -10371,7 +10385,7 @@ function Planungstool(){
               ohne.length?React.createElement("div",{"data-spr-ma":"erledigt",style:{display:"flex",flexDirection:"column",gap:3}},
                 React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.textMid,borderBottom:"1px solid "+A.border,paddingBottom:2}},"erledigt"),
                 ohne.map(wiZeile)):null,
-            !ids.length?React.createElement("span",{style:kl},sprWahl?"antippen, um das gew\u00e4hlte Workitem einzuplanen":"Workitems hierher ziehen"):null);})());
+            !ids.length?React.createElement("span",{style:kl},wahlL.length?"antippen, um "+(wahlL.length>1?"die "+wahlL.length+" gew\u00e4hlten Workitems":"das gew\u00e4hlte Workitem")+" einzuplanen":"Workitems hierher ziehen"):null);})());
       }));
     // v3.14.1: ohne eigenes overflow, sonst haftet die Ringkarte nicht (Scroller ist .main-scroll)
     if(reiter==="sync")return React.createElement("div",{style:{padding:20,flex:1,minHeight:0}},kopf,syncAnsicht());
