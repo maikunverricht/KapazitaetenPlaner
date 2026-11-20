@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.30.0";
+var APP_VERSION="3.31.0";
+// v3.31.0: Bericht ohne erfasste Zeiten (Maik) -- Ist/Quote, Abrechnung und Verlauf entfernt; Kapazitaet (Soll) und Termine bleiben.
 // v3.30.0: Sprintplanung -- mehrere Workitems auf einmal einplanen (Maik): Antippen sammelt, "alle waehlen" je Bearbeiterblock, Ziehen eines gewaehlten zieht alle, Sprint antippen plant alle ein.
 // v3.29.1: Fix -- Sprints der Gruppen (takte) wurden beim Laden verworfen.
 // v3.29.0: Sprints -- Restaufwand: Last rechnet offene WIs hoechstens mit aktuellem Rest, Hinweis + "an Rest anpassen"; Gruppen zuklappbar, Einzelteams nur beim Ausklappen, dort aus der Gruppe nehmen (Maik).
@@ -10782,7 +10783,7 @@ function Planungstool(){
           ? React.createElement("div",{style:{fontSize:"var(--fs-md)",color:A.textLight}},"Keine Mitarbeiter importiert.")
           : React.createElement("table",{style:{width:"100%",borderCollapse:"collapse"}},
               React.createElement("thead",null,React.createElement("tr",null,
-                ["Mitarbeiter","Abteilung","AT","Feiertage","Abwesend","Soll","Ist","Quote"]
+                ["Mitarbeiter","Abteilung","AT","Feiertage","Abwesend","Soll"]  /* v3.31.0: ohne erfasste Zeit */
                 .map(function(h,i){return React.createElement("th",{key:i,
                   style:Object.assign({},th,{textAlign:i>=2?"right":"left"})},h);})
               )),
@@ -10794,11 +10795,7 @@ function Planungstool(){
                     React.createElement("td",{style:num},String(r.wd)),
                     React.createElement("td",{style:num},String(r.hol)),
                     React.createElement("td",{style:num},String(r.abs)),
-                    React.createElement("td",{style:num},secToHHMM(r.soll)),
-                    React.createElement("td",{style:num},secToHHMM(r.ist)),
-                    React.createElement("td",{style:Object.assign({},num,{fontWeight:800,
-                      color:r.soll<=0?A.textLight:r.pct>110?A.coral:r.pct>=90?A.green:A.amber})},
-                      r.soll>0?r.pct+" %":"—")
+                    React.createElement("td",{style:num},secToHHMM(r.soll))
                   );
                 }),
                 React.createElement("tr",{"data-rep-total":"1",style:{background:A.bg}},
@@ -10807,67 +10804,13 @@ function Planungstool(){
                   React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},String(tot.wd)),
                   React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},String(tot.hol)),
                   React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},String(tot.abs)),
-                  React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},secToHHMM(tot.soll)),
-                  React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},secToHHMM(tot.ist)),
-                  React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},
-                    tot.soll>0?Math.round(tot.ist/tot.soll*100)+" %":"—")
+                  React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},secToHHMM(tot.soll))
                 )
               )
             )
       ),
 
-      // Abrechnung
-      React.createElement("div",{className:"report-block",style:sheet},
-        React.createElement("div",{style:h2},"Abrechnung"),
-        bill.total===0
-          ? React.createElement("div",{style:{fontSize:"var(--fs-md)",color:A.textLight}},
-              "Im Zeitraum wurde keine Zeit erfasst.")
-          : React.createElement(Fragment,null,
-              React.createElement("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
-                [["Auf Workitems",bill.wi,A.text],
-                 ["Abrechnungsnummern, abrechenbar",bill.acctB,A.mint],
-                 ["Abrechnungsnummern, intern",bill.acctI,A.textLight],
-                 ["Abrechenbar gesamt",bill.billable,A.mint]]
-                .map(function(b){
-                  return React.createElement("div",{key:b[0],"data-rep-bill":b[0],
-                    style:{flex:1,minWidth:160,padding:"9px 12px",borderRadius:"var(--r-lg)",
-                      background:A.bg,border:"1px solid "+A.border}},
-                    React.createElement("div",{style:{fontSize:"var(--fs-2xs)",fontWeight:800,color:A.textLight,
-                      textTransform:"uppercase",letterSpacing:0.5}},b[0]),
-                    React.createElement("div",{style:{fontSize:"var(--fs-xl)",fontWeight:800,marginTop:3,
-                      fontFamily:"var(--font-mono)",color:b[2]}},secToHHMM(b[1]))
-                  );
-                })
-              ),
-              React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textLight,marginTop:10}},
-                "Abrechenbare Quote: ",
-                React.createElement("b",null,bill.total>0?Math.round(bill.billable/bill.total*100)+" %":"—"),
-                " der erfassten Zeit.")
-            )
-      ),
-
-      // Verlauf
-      React.createElement("div",{className:"report-block",style:sheet},
-        React.createElement("div",{style:h2},"Verlauf der erfassten Zeit"),
-        React.createElement("div",{style:{display:"flex",alignItems:"flex-end",gap:10,height:110}},
-          (function(){
-            var max=Math.max.apply(null,trend.map(function(x){return x.sec;}).concat([1]));
-            return trend.map(function(x){
-              var h=Math.round((x.sec/max)*80);
-              return React.createElement("div",{key:x.ym,"data-rep-trend":x.ym,
-                style:{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}},
-                React.createElement("div",{style:{fontSize:"var(--fs-2xs)",fontWeight:700,color:A.textMid}},
-                  x.sec>0?secToHHMM(x.sec):""),
-                React.createElement("div",{style:{width:"100%",height:Math.max(h,2),
-                  background:x.ym===rp.ym?A.mint:alpha(A.mint,"55"),borderRadius:"var(--r-sm) var(--r-sm) 0 0"}}),
-                React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,whiteSpace:"nowrap"}},
-                  x.label.replace(/ \d{4}$/,""))
-              );
-            });
-          })()
-        )
-      ),
-
+      // v3.31.0 (Maik): Abrechnung und Verlauf der erfassten Zeit entfallen -- der Bericht wertet keine erfassten Zeiten aus.
       // Termine
       React.createElement("div",{className:"report-block",style:sheet},
         React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}},
@@ -10906,7 +10849,7 @@ function Planungstool(){
 
       React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,lineHeight:1.6}},
         "Soll = Arbeitstage \u00d7 Tageskapazit\u00e4t je Mitarbeiter, abz\u00fcglich Feiertagen und Abwesenheiten. ",
-        "Ist = erfasste Zeit aus der Zeiterfassung. Prognose = sp\u00e4testes berechnetes Ende eines offenen Workitems (wie im Termin-Radar). Verzug in Arbeitstagen gegen den BC-Termin.")
+        "Prognose = sp\u00e4testes berechnetes Ende eines offenen Workitems (wie im Termin-Radar). Verzug in Arbeitstagen gegen den BC-Termin.")
     );
   }
 
