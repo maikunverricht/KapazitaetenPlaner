@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.25.0";
+var APP_VERSION="3.26.0";
+// v3.26.0: Sprints -- gewaehlte Teams als Gruppe unter eigenem Namen speichern (Maik); ein Klick waehlt die Gruppe, Titel zeigt ihren Namen.
 // v3.25.0: Sprints fuer mehrere Teams parallel planen (Maik) -- Teams oben an-/abwaehlen, Liste und Sprints zeigen alle gewaehlten, Last je Team im Sprint.
 // v3.24.0: Dashboard passt auf eine Seite (Maik) -- Raster in der freien Hoehe, M0 zwei Zeilen, Inhalt rollt in der Kachel; schmal (<700px) oder zu eng rollt die Seite wie bisher.
 // v3.23.0: Anmeldung einmal am Tag (Maik) -- der Name aus dem Startbildschirm gilt bis Mitternacht; "Name wechseln" fragt neu.
@@ -4797,12 +4798,12 @@ function vlWid(vl,iid,k,name){
    ptool_sprints = {start:"JJJJ-MM-TT", wochen:2, ende:{nr:"JJJJ-MM-TT"}, zu:{pkgId:{nr:h}}}
    Sprint n beginnt am Tag nach dem Ende von n-1; "ende" verschiebt nur diesen Sprint. */
 var SPR_KEY="ptool_sprints";
-function sprLeer(){return {start:"",wochen:2,ende:{},zu:{},team:"",teams:[],mitglied:{},sync:{}};}
+function sprLeer(){return {start:"",wochen:2,ende:{},zu:{},team:"",teams:[],gruppen:{},mitglied:{},sync:{}};}
 function sprLaden(){var v=null;try{v=JSON.parse(localStorage.getItem(SPR_KEY)||"null");}catch(e){}
   if(!v||typeof v!=="object"||Array.isArray(v))return sprLeer();
   return {start:typeof v.start==="string"?v.start:"",wochen:Math.max(1,Math.min(6,Number(v.wochen)||2)),
     ende:v.ende&&typeof v.ende==="object"?v.ende:{},zu:v.zu&&typeof v.zu==="object"?v.zu:{},
-    team:typeof v.team==="string"?v.team:"",teams:Array.isArray(v.teams)?v.teams.filter(function(t){return typeof t==="string";}):[],mitglied:v.mitglied&&typeof v.mitglied==="object"&&!Array.isArray(v.mitglied)?v.mitglied:{},
+    team:typeof v.team==="string"?v.team:"",teams:Array.isArray(v.teams)?v.teams.filter(function(t){return typeof t==="string";}):[],gruppen:v.gruppen&&typeof v.gruppen==="object"&&!Array.isArray(v.gruppen)?v.gruppen:{},mitglied:v.mitglied&&typeof v.mitglied==="object"&&!Array.isArray(v.mitglied)?v.mitglied:{},
     sync:v.sync&&typeof v.sync==="object"&&!Array.isArray(v.sync)?v.sync:{}};}
 /* v3.7.0: Team eines Mitarbeiters -- eigene Zuordnung vor Abteilung */
 function sprTeamVon(cfg,emp){if(!emp)return "";var m=cfg&&cfg.mitglied&&cfg.mitglied[emp.id];return m||emp.department||"Ohne Abteilung";}
@@ -10091,7 +10092,15 @@ function Planungstool(){
     var team0=teams.indexOf(cfg.team)>=0?cfg.team:(selfEmp&&teams.indexOf(sprTeamVon(cfg,selfEmp))>=0?sprTeamVon(cfg,selfEmp):(teams[0]||""));
     // v3.25.0 (Maik): mehrere Teams parallel planen -- cfg.teams = Auswahl, cfg.team = erstes (Lesekopie, Kontor)
     var wahlT=(cfg.teams||[]).filter(function(t){return teams.indexOf(t)>=0;});if(!wahlT.length)wahlT=team0?[team0]:[];
-    var mehrT=wahlT.length>1,team=wahlT.join(" + ");
+    // v3.26.0 (Maik): gewaehlte Teams unter eigenem Namen zusammenfassen -- cfg.gruppen = {Name:[Teams]}
+    var gruppen=cfg.gruppen||{};
+    var gruppeAkt=Object.keys(gruppen).filter(function(g){var l=(gruppen[g]||[]).filter(function(t){return teams.indexOf(t)>=0;});
+      return l.length===wahlT.length&&l.every(function(t){return wahlT.indexOf(t)>=0;});})[0]||"";
+    var mehrT=wahlT.length>1,team=gruppeAkt||wahlT.join(" + ");
+    var s_gn=useState(null);var gruppeNeu=s_gn[0],setGruppeNeu=s_gn[1];
+    function gruppeWaehlen(g){aendern(function(n){var l=teams.filter(function(t){return (n.gruppen[g]||[]).indexOf(t)>=0;});if(l.length){n.teams=l;n.team=l[0];}});}
+    function gruppeSpeichern(name){name=String(name||"").trim();if(!name)return;aendern(function(n){if(!n.gruppen)n.gruppen={};n.gruppen[name]=wahlT.slice();});setGruppeNeu(null);}
+    function gruppeLoeschen(g){aendern(function(n){if(n.gruppen)delete n.gruppen[g];});}
     function teamUmschalten(t){aendern(function(n){var l=(n.teams&&n.teams.length?n.teams:wahlT).slice();var i=l.indexOf(t);
       if(i>=0){if(l.length>1)l.splice(i,1);}else l.push(t);
       l=teams.filter(function(x){return l.indexOf(x)>=0;});n.teams=l;n.team=l[0]||"";});}
@@ -10135,11 +10144,25 @@ function Planungstool(){
       aktI>0?React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},React.createElement("input",{type:"checkbox",checked:vor>0,onChange:function(e){setVor(e.target.checked?1:0);}}),"vorigen Sprint zeigen"):null,
       React.createElement("div",{role:"group","aria-label":"Teams","data-spr-team":"1",style:Object.assign({},kl,{display:"inline-flex",gap:4,alignItems:"center",flexWrap:"wrap"})},
         React.createElement("span",{style:{marginRight:2}},"Teams"),
+        Object.keys(gruppen).sort(function(a,b){return a.localeCompare(b,"de");}).map(function(g){var an=g===gruppeAkt;
+          return React.createElement("span",{key:"g:"+g,style:{display:"inline-flex",alignItems:"center"}},
+            React.createElement("button",{type:"button","data-spr-gruppe":g,"aria-pressed":an?"true":"false",title:(gruppen[g]||[]).join(" + "),
+              onClick:function(){gruppeWaehlen(g);},
+              style:Object.assign({},ein,{cursor:"pointer",fontWeight:700,borderColor:an?A.violet:A.border,background:an?A.violetLight:A.surface,color:an?A.violet:A.textMid,borderRadius:"999px 0 0 999px",padding:"3px 10px"})},"\u25a3 "+g),
+            React.createElement("button",{type:"button","data-spr-gruppe-weg":g,"aria-label":"Gruppe "+g+" l\u00f6schen",title:"Gruppe l\u00f6schen (Teams bleiben)",
+              onClick:function(){if(confirm("Gruppe \u201e"+g+"\u201c l\u00f6schen? Die Teams bleiben."))gruppeLoeschen(g);},
+              style:Object.assign({},ein,{cursor:"pointer",borderLeft:"none",borderColor:an?A.violet:A.border,borderRadius:"0 999px 999px 0",padding:"3px 7px",color:A.textLight})},"\u00d7"));}),
         teams.map(function(t){var an=wahlT.indexOf(t)>=0;
           return React.createElement("button",{key:t,type:"button","data-spr-team-wahl":t,"aria-pressed":an?"true":"false",
             title:an?(wahlT.length>1?"Team abw\u00e4hlen":"mindestens ein Team bleibt gew\u00e4hlt"):"Team dazunehmen",
             onClick:function(){teamUmschalten(t);},
-            style:Object.assign({},ein,{cursor:"pointer",fontWeight:an?700:500,borderColor:an?A.mint:A.border,background:an?A.mintLight:A.surface,color:an?A.mintInk:A.textMid,borderRadius:999,padding:"3px 10px"})},(an?"\u2713 ":"")+t);})),
+            style:Object.assign({},ein,{cursor:"pointer",fontWeight:an?700:500,borderColor:an?A.mint:A.border,background:an?A.mintLight:A.surface,color:an?A.mintInk:A.textMid,borderRadius:999,padding:"3px 10px"})},(an?"\u2713 ":"")+t);}),
+        mehrT&&!gruppeAkt?(gruppeNeu===null
+          ?React.createElement("button",{type:"button","data-spr-gruppe-neu":"1",onClick:function(){setGruppeNeu("");},style:Object.assign({},ein,{cursor:"pointer",borderStyle:"dashed",borderRadius:999,padding:"3px 10px"})},"Als Gruppe speichern\u2026")
+          :React.createElement("form",{style:{display:"inline-flex",gap:4},onSubmit:function(e){e.preventDefault();gruppeSpeichern(gruppeNeu);}},
+            React.createElement("input",{autoFocus:true,value:gruppeNeu,"data-spr-gruppe-name":"1","aria-label":"Name der Gruppe",placeholder:"Name, z. B. Abgas",
+              onChange:function(e){setGruppeNeu(e.target.value);},onKeyDown:function(e){if(e.key==="Escape")setGruppeNeu(null);},style:Object.assign({},ein,{width:150})}),
+            React.createElement("button",{type:"submit",style:Object.assign({},ein,{cursor:"pointer",fontWeight:700})},"Speichern"))):null),
       React.createElement("button",{type:"button","data-spr-mg-knopf":"1",onClick:function(){setMgOffen(!mgOffen);},style:knopf},mgOffen?"Teams schlie\u00dfen":"Teams zuordnen"),
       React.createElement("span",{style:kl},"Sprintzeiten gelten f\u00fcr alle Teams, Inhalte je Team. Ende eines Sprints \u00e4nderbar; der n\u00e4chste beginnt am Tag danach."));
     if(mgOffen)kopf=React.createElement(React.Fragment,null,kopf,mitglieder);
