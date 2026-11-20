@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.29.0";
+var APP_VERSION="3.29.1";
+// v3.29.1: Fix -- Sprints der Gruppen (takte) wurden beim Laden verworfen.
 // v3.29.0: Sprints -- Restaufwand: Last rechnet offene WIs hoechstens mit aktuellem Rest, Hinweis + "an Rest anpassen"; Gruppen zuklappbar, Einzelteams nur beim Ausklappen, dort aus der Gruppe nehmen (Maik).
 // v3.28.0: Sprintplanung -- Workitem-Liste je KW nach Bearbeiter gruppiert und zuklappbar (Maik).
 // v3.27.0: Separate Sprints je Gruppe (Maik) -- eigener Takt (Start, Laenge, Enden, Inhalte, Sync) in cfg.takte; beim Anlegen kopiert vom gemeinsamen Takt; Meldungen ueber alle Takte.
@@ -4801,13 +4802,15 @@ function vlWid(vl,iid,k,name){
    ptool_sprints = {start:"JJJJ-MM-TT", wochen:2, ende:{nr:"JJJJ-MM-TT"}, zu:{pkgId:{nr:h}}}
    Sprint n beginnt am Tag nach dem Ende von n-1; "ende" verschiebt nur diesen Sprint. */
 var SPR_KEY="ptool_sprints";
-function sprLeer(){return {start:"",wochen:2,ende:{},zu:{},team:"",teams:[],gruppen:{},mitglied:{},sync:{}};}
+function sprLeer(){return {start:"",wochen:2,ende:{},zu:{},team:"",teams:[],gruppen:{},takte:{},mitglied:{},sync:{}};}
 function sprLaden(){var v=null;try{v=JSON.parse(localStorage.getItem(SPR_KEY)||"null");}catch(e){}
   if(!v||typeof v!=="object"||Array.isArray(v))return sprLeer();
   return {start:typeof v.start==="string"?v.start:"",wochen:Math.max(1,Math.min(6,Number(v.wochen)||2)),
     ende:v.ende&&typeof v.ende==="object"?v.ende:{},zu:v.zu&&typeof v.zu==="object"?v.zu:{},
     team:typeof v.team==="string"?v.team:"",teams:Array.isArray(v.teams)?v.teams.filter(function(t){return typeof t==="string";}):[],gruppen:v.gruppen&&typeof v.gruppen==="object"&&!Array.isArray(v.gruppen)?v.gruppen:{},mitglied:v.mitglied&&typeof v.mitglied==="object"&&!Array.isArray(v.mitglied)?v.mitglied:{},
-    sync:v.sync&&typeof v.sync==="object"&&!Array.isArray(v.sync)?v.sync:{}};}
+    sync:v.sync&&typeof v.sync==="object"&&!Array.isArray(v.sync)?v.sync:{},
+    // v3.29.1: eigene Takte der Gruppen mitladen (fehlte seit v3.27.0 -- Sprints der Gruppen gingen beim Neuladen verloren)
+    takte:v.takte&&typeof v.takte==="object"&&!Array.isArray(v.takte)?v.takte:{}};}
 /* v3.7.0: Team eines Mitarbeiters -- eigene Zuordnung vor Abteilung */
 function sprTeamVon(cfg,emp){if(!emp)return "";var m=cfg&&cfg.mitglied&&cfg.mitglied[emp.id];return m||emp.department||"Ohne Abteilung";}
 /* v3.27.0 (Maik): "Separate Sprints fuer jede Gruppe". Jede Gruppe hat ihren eigenen Takt
