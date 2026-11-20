@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.22.2";
+var APP_VERSION="3.23.0";
+// v3.23.0: Anmeldung einmal am Tag (Maik) -- der Name aus dem Startbildschirm gilt bis Mitternacht; "Name wechseln" fragt neu.
 // v3.22.2: Dashboard M0 -- Zeile "Startet bis" entfaellt (Maik); in der Start-Uebersicht bleibt sie.
 // v3.22.1: Dashboard M0 -- Spalte/Zeile "Faellig bis" entfaellt (Maik); in der Start-Uebersicht bleibt sie.
 // v3.22.0: Dashboard-Kachel M5 "Ich warte auf" (Maik) -- offene Vorgaenger je eigenem WI mit Bearbeiter (immer mit Namen, Ausnahme ACC-08) und Prognose; die Warte-Zeilen unter "Heute" entfallen.
@@ -7278,7 +7279,13 @@ function Planungstool(){
   // zur Standardsortierung -- so kommt man immer wieder zum Ausgangsbild.
   // v2.52.0: Startsequenz. dashUser bleibt bewusst fluechtig -- die Abfrage soll
   // bei jedem Start erscheinen. Nur die Namensvorschlaege werden gespeichert.
-  var s_dashUser=useState(null); var dashUser=s_dashUser[0],setDashUser=s_dashUser[1];
+  // v3.23.0 (Maik): "Nur einmal am Tag einloggen" -- der bestaetigte Name gilt bis
+  // Mitternacht (ptool_login_tag). Danach, oder nach "Name wechseln", fragt der
+  // Startbildschirm wieder. Die erweiterte Ansicht (Code) bleibt davon unberuehrt.
+  var s_dashUser=useState(function(){
+    var l=lsLoad("ptool_login_tag",null);
+    return (l&&l.n&&l.tag===dateStr(new Date()))?String(l.n):null;
+  }); var dashUser=s_dashUser[0],setDashUser=s_dashUser[1];
   // v2.84.0: Befunde erst NACH dem Bootscreen zeigen -- sonst liegen zwei
   // Dialoge uebereinander und der erste Eindruck ist ein Fehlerstapel.
   // Diese Zeilen stehen bewusst HINTER s_dashUser: var-Deklarationen werden
@@ -7314,6 +7321,7 @@ function Planungstool(){
     setRecentNames(next);
     try{localStorage.setItem("ptool_recent_names",JSON.stringify(next));}catch(e){}
     setDashUser(n);
+    try{localStorage.setItem("ptool_login_tag",JSON.stringify({n:n,tag:dateStr(new Date())}));}catch(e){} // v3.23.0
     setView("dashboard");
     return true;
   }
@@ -14122,7 +14130,7 @@ function Planungstool(){
               "\u21ba Alle einblenden")
           )
         ),
-        React.createElement("button",{onClick:function(){setDashUser(null);},
+        React.createElement("button",{onClick:function(){try{localStorage.removeItem("ptool_login_tag");}catch(e){}setDashUser(null);},
           title:"Namen wechseln",
           style:{padding:"6px 12px",borderRadius:"var(--r-md)",border:"1px solid "+A.border,background:A.bg,
             color:A.textMid,fontSize:"var(--fs-sm)",fontWeight:700,cursor:"pointer",flexShrink:0}},"Name wechseln")
