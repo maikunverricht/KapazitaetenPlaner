@@ -2104,6 +2104,7 @@ var DASH_CARD_DEFS=[
   {key:"M0", v:"me", label:"Heute \u00b7 Briefing", top:true}, // v2.98.0
   {key:"M1", v:"me", label:"Woran ich gerade arbeite"},
   {key:"M3", v:"me", label:"Rutscht durch Kapazit\u00e4t nach hinten"},
+  {key:"M5", v:"me", label:"Ich warte auf"}, // v3.22.0
   {key:"M6", v:"me", label:"Meine Business Cases"},
   {key:"M7", v:"me", label:"Ich bestimme die Prognose"},
   {key:"M8", v:"me", label:"Restaufwand gegen Kapazit\u00e4t"},
@@ -2555,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.21.1";
+var APP_VERSION="3.22.0";
+// v3.22.0: Dashboard-Kachel M5 "Ich warte auf" (Maik) -- offene Vorgaenger je eigenem WI mit Bearbeiter (immer mit Namen, Ausnahme ACC-08) und Prognose; die Warte-Zeilen unter "Heute" entfallen.
 // v3.21.1: Dashboard -- BC-Status nicht mehr unter "Heute" (M0), nur noch in M6 "Meine Business Cases".
 // v3.21.0: Testfaelle links im V (Maik): SWE.1 ist erst gruen, wenn jede L2/L3/L4 des Auftrags im TestcaseManager einen Testfall ihrer Ebene hat (spezifiziert genuegt); Anzeige "Testfaelle x/y" am Schritt.
 // v3.20.0: Planer- vs. CQ-Workitems (Maik): Solange es kein CQ-Workitem gibt, gelten die vom Planer; ein CQ-Workitem ersetzt die offenen Planer-Workitems seines Schritts (gleiche Rolle). Nach jedem Import automatisch, Schritt aus dem Titel (SWE.1-6); nicht Erkanntes bleibt zum Ziehen. Von Hand geloeste Zuordnungen bleiben geloest.
@@ -6415,7 +6417,7 @@ function buildBriefing(o){
   blocked.forEach(function(x){
     var who="Kollege";
     if(x.q.employee===me.id)who="eigenes";
-    else if(o.canSeeAll){var qe=(o.employees||[]).filter(function(e){return e.id===x.q.employee;})[0];if(qe)who=qe.name;}
+    else{var qe=(o.employees||[]).filter(function(e){return e.id===x.q.employee;})[0];if(qe)who=qe.name;} // v3.22.0: Name immer (Ausnahme ACC-08)
     I.push({k:"block-"+x.p.id,sev:"amber",go:{t:"view",v:"umplanung"},text:"",wis:[ref(x.p,"")],
       after:"wartet auf "+x.q.id+" "+(x.q.title||"")+" ("+who+"), voraussichtlich fertig "+brWdDay(x.qe)+
         " — dein Start "+brWdDay(x.p.start)});
@@ -6481,7 +6483,7 @@ function BriefingList(p){
         React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textMid,marginTop:3,lineHeight:1.3}},s.label));
     })):null;
   var ohne=p.ohne||{};
-  var rows=b.items.filter(function(it){return !ohne[it.k]&&!(ohne.bc&&it.k.indexOf("bc-")===0);})  /* v3.21.1: ohne.bc blendet alle BC-Zeilen aus */.map(function(it,i){
+  var rows=b.items.filter(function(it){return !ohne[it.k]&&!(ohne.bc&&it.k.indexOf("bc-")===0)&&!(ohne.block&&it.k.indexOf("block-")===0);})  /* v3.21.1: ohne.bc blendet alle BC-Zeilen aus */.map(function(it,i){
     var g=it.go,clickable=!!(g&&canGo(g)),isData=it.k==="daten";
     return React.createElement("div",{key:it.k,"data-brief-item":it.k,"data-import-ask":isData?"1":undefined,
       role:clickable?"button":undefined,tabIndex:clickable?0:undefined,
@@ -8722,7 +8724,7 @@ function Planungstool(){
         {id:"F-07",p:"S",t:"Funk",r:"Workitems ohne FC (direkt am BC) erscheinen bei ausgeschalteter WI-Ebene als eine Sammelzeile 'Direkt am BC (ohne FC)'.",v:"data-agg-direct",tc:"F-A-6, F-B-3 [Auto]"},
         {id:"ACC-01",p:"M",t:"Funk",r:"Wird der eingegebene Name einem Mitarbeiter zugeordnet, zeigen die Ansichten nur dessen Daten: eigene Zeile in Auslastung und Matrix, eigene Workitems in der BC-Sicht, kein Bericht.",v:"visibleEmployees / ownPkgs",tc:"S-A-*, S-C-*, S-D-1 [Auto]"},
         {id:"ACC-10",p:"M",t:"Funk",r:"Gebucht wird nur auf EIGENE offene Workitems. Abrechnungsnummern bleiben immer buchbar -- sie gehoeren keinem Mitarbeiter. Ohne erkannten Namen stehen nur die Nummern zur Wahl.",v:"openWorkitems mit isAcct und selfEmp",tc:"Buchungsziele [Auto]"},
-        {id:"ACC-08",p:"M",t:"Funk",r:"Der Sichtschutz gilt in JEDER Ansicht und jedem Menue: Umplanung (Liste und Karten), Filtermenue (Mitarbeiter und Teams), Szenario-Maske, Zeiterfassung und deren Mitarbeiterauswahl. Seit v2.88.3 auch die Dashboard-Kachel M5 und die globale Suche der Seitenleiste.",v:"visibleEmployees / canSeeAll an allen Listen",tc:"Leck-Suche [Auto]"},
+        {id:"ACC-08",p:"M",t:"Funk",r:"Der Sichtschutz gilt in JEDER Ansicht und jedem Menue: Umplanung (Liste und Karten), Filtermenue (Mitarbeiter und Teams), Szenario-Maske, Zeiterfassung und deren Mitarbeiterauswahl. Seit v2.88.3 auch die globale Suche der Seitenleiste. Ausnahme seit v3.22.0 (Maik): Die Kachel M5 \"Ich warte auf\" nennt den Bearbeiter des Vorgaenger-WIs, auf das ich warte, immer mit Namen.",v:"visibleEmployees / canSeeAll an allen Listen",tc:"Leck-Suche [Auto]"},
         {id:"ACC-09",p:"M",t:"Funk",r:"Speist eine Ansicht sich aus mehreren Quellen, traegt JEDE Quelle den Sichtschutz. Die Kartenansicht der Umplanung liest aus analysis und aus allPkgs -- eine Pruefung allein an der ersten Quelle laesst die zweite offen.",v:"canSeeAll-Pruefung in beiden Schleifen",tc:"UM-A-1..3 [Auto]"},
         {id:"ACC-13",p:"S",t:"Funk",r:"Abrechnungsnummern tragen ein frei waehlbares Feld Gruppe. Leer heisst 'ohne Gruppe'. Die Vorschlagsliste speist sich aus den bereits vergebenen Werten.",v:"datalist acct-groups",tc:"AG-A-1..3 [Auto]"},
         {id:"ACC-11",p:"S",t:"Funk",r:"Die Gruppe bildet die BC-Ebene des Buchungsziels, das Kennzeichen abrechenbar/intern bleibt die FC-Ebene. Dadurch wirkt die Buendelung in Soll/Ist-Baum, Schnellauswahl und Export ohne Sonderweg.",v:"timeWiIndex bc/fc",tc:"AG-B-1..3 [Auto]"},
@@ -13686,7 +13688,7 @@ function Planungstool(){
         Card({tag:"M0",title:"Heute · "+brWdDay(todayStr),wide:true},
           briefing&&briefing.board?React.createElement(HeuteBoard,{b:briefing,onGo:briefGo}):null,
           React.createElement(BriefingList,{b:briefing,onGo:briefGo,canGo:briefCanGo,
-            ohne:briefing&&briefing.board?{ueber:1,start:1,faellig:1,bc:1}:{bc:1},ohneStats:!!(briefing&&briefing.board)}),  /* v3.21.1: BC-Status nur in M6 */
+            ohne:briefing&&briefing.board?{ueber:1,start:1,faellig:1,bc:1,block:1}:{bc:1,block:1},ohneStats:!!(briefing&&briefing.board)}),  /* v3.21.1: BC-Status nur in M6 */
           // v2.99.0: Aenderungen des letzten Imports, bis zum naechsten Import
           impView&&React.createElement("div",{"data-imp-tile":"1",style:{marginTop:12,paddingTop:10,borderTop:"1px solid "+A.border}},
             React.createElement("div",{style:{fontSize:"var(--fs-sm)",fontWeight:800,color:A.text,marginBottom:6}},
@@ -13735,20 +13737,31 @@ function Planungstool(){
                 (faelligH>verfuegbar?" \u2014 das geht nicht auf.":"."))
           ):Empty("Nichts f\u00e4llig in den n\u00e4chsten 14 Tagen.")),
 
-        Card({tag:"M5",title:"Blockiert durch Vorg\u00e4nger"},
-          blockiert.length?React.createElement("div",null,
-            blockiert.slice(0,4).map(function(x,i){
-              var q=x.open[0];
-              var qEmp=employees.find(function(e){return e.id===q.employee;});
-              // v2.88.3: Neuntes Leck derselben Bauart. Gesperrt bleibt die
-              // Aussage (es wartet auf jemand anderen), der Name entfaellt.
-              var qWho=!qEmp?"":(canSeeAll||qEmp.id===me.id)?qEmp.name:"Kollege";
-              return React.createElement("div",{key:x.p.id,style:{padding:"5px 0",
+        // v3.22.0 (Maik): "Ich warte auf" -- je eigenem WI die offenen Vorgaenger mit
+        // Bearbeiter (immer mit Namen, Ausnahme von ACC-08) und voraussichtlichem Ende.
+        Card({tag:"M5",title:"Ich warte auf"},
+          blockiert.length?React.createElement("div",{"data-warte":"1"},
+            blockiert.slice().sort(function(a,b){return (a.p.start||"")<(b.p.start||"")?-1:1;}).slice(0,6).map(function(x,i){
+              return React.createElement("div",{key:x.p.id,"data-warte-wi":x.p.id,style:{padding:"7px 0",
                 borderTop:i===0?"none":"1px solid "+A.border}},
-                React.createElement("div",{className:"lwtitle",style:{fontSize:"var(--fs-sm)",fontWeight:700}},x.p.title),
-                React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textLight,marginTop:2}},
-                  "wartet auf "+q.title+(qWho?" ("+qWho+")":"")+" \u00b7 "+short(capEndOf[q.id]||q.end)));
-            })
+                React.createElement("div",{style:{display:"flex",gap:8,alignItems:"baseline",minWidth:0}},
+                  React.createElement("span",{style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-xs)",color:A.textMid,flexShrink:0}},x.p.id),
+                  React.createElement("span",{className:"lwtitle",style:{fontSize:"var(--fs-sm)",fontWeight:700,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},x.p.title),
+                  React.createElement("span",{style:{marginLeft:"auto",fontSize:"var(--fs-xs)",color:A.textLight,flexShrink:0}},"Start "+short(x.p.start))),
+                x.open.map(function(q){
+                  var qEmp=employees.find(function(e){return e.id===q.employee;});
+                  var wer=qEmp?(qEmp.id===me.id?"du selbst":qEmp.name):"nicht zugeordnet";
+                  var fertig=capEndOf[q.id]||q.end,spaet=fertig&&x.p.start&&fertig>=x.p.start;
+                  return React.createElement("div",{key:q.id,"data-warte-auf":q.id,style:{display:"flex",gap:8,alignItems:"baseline",flexWrap:"wrap",
+                    fontSize:"var(--fs-xs)",color:A.textMid,marginTop:3,paddingLeft:10}},
+                    React.createElement("span",{"aria-hidden":"true"},"\u21b3"),
+                    React.createElement("span",{style:{fontFamily:"var(--font-mono)"}},q.id),
+                    React.createElement("span",{style:{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:200}},q.title||""),
+                    React.createElement("span",{"data-warte-wer":"1",style:{fontWeight:700,color:A.text}},wer),
+                    React.createElement("span",{style:{marginLeft:"auto",color:spaet?A.coralInk:A.textLight,fontWeight:spaet?700:400}},"fertig "+short(fertig)));
+                }));
+            }),
+            blockiert.length>6?Sub("+"+(blockiert.length-6)+" weitere"):null
           ):Empty("Kein WI wartet auf einen offenen Vorg\u00e4nger.")),
 
         Card({tag:"M6",title:"Meine Business Cases"},
