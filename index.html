@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.31.0";
+var APP_VERSION="3.32.0";
+// v3.32.0: Bericht (Maik) -- Kapazitaet mit Geplant/Quote/Ueberlast-Wochen aus der Planung, neu: Fortschritt je BC/FC, Sprint-Bilanz, V-Status je Issue, Datenqualitaet.
 // v3.31.0: Bericht ohne erfasste Zeiten (Maik) -- Ist/Quote, Abrechnung und Verlauf entfernt; Kapazitaet (Soll) und Termine bleiben.
 // v3.30.0: Sprintplanung -- mehrere Workitems auf einmal einplanen (Maik): Antippen sammelt, "alle waehlen" je Bearbeiterblock, Ziehen eines gewaehlten zieht alle, Sprint antippen plant alle ein.
 // v3.29.1: Fix -- Sprints der Gruppen (takte) wurden beim Laden verworfen.
@@ -10666,58 +10667,67 @@ function Planungstool(){
           }
           cur.setDate(cur.getDate()+1);
         }
-        var ist=0;
-        (timeEntries||[]).forEach(function(t){
-          if(!t.date||t.date<span.from||t.date>span.to)return;
-          if(t.employeeName&&!sameEmpName(t.employeeName,e.name))return;
-          ist+=(t.seconds||0);
-        });
-        var soll=wd*hpd*3600;
+        var soll=wd*hpd*3600;   // v3.31.0: keine erfasste Zeit mehr
         return {id:e.id,name:e.name,dept:e.department||"—",hpd:hpd,
-                wd:wd,abs:abs,hol:hol,soll:soll,ist:ist,
-                pct:soll>0?Math.round(ist/soll*100):0};
+                wd:wd,abs:abs,hol:hol,soll:soll};
       });
       rows.sort(function(a,b){return a.name<b.name?-1:1;});
       return rows;
-    },[employees,absenceMap,timeEntries,span]);
+    },[employees,absenceMap,span]);
 
+    // v3.32.0 (Maik): Auslastung aus der Planung -- geplanter Restaufwand im Zeitraum
+    // (verteilt wie in der Heatmap) gegen Soll; Ueberlast-Wochen = Wochen mit mehr
+    // Plan als verfuegbaren Stunden.
+    var planJe=useMemo(function(){var out={};
+      (employees||[]).forEach(function(e){var lm=loadMap[e.id]||{},am=absenceMap[e.id]||{},c=dailyCapacity(e),plan=0,woche={};
+        var cur=new Date(span.from+"T00:00:00"),end=new Date(span.to+"T00:00:00"),g=0;
+        while(cur<=end&&g++<400){var ds=dateStr(cur),l=lm[ds]||0;plan+=l;
+          if(!isWE(cur)){var mo=new Date(cur);mo.setDate(mo.getDate()-((mo.getDay()+6)%7));var wk=dateStr(mo);
+            if(!woche[wk])woche[wk]={cap:0,load:0};woche[wk].load+=l;if(!am[ds])woche[wk].cap+=c;}
+          cur.setDate(cur.getDate()+1);}
+        out[e.id]={plan:plan,ueber:Object.keys(woche).filter(function(k){return woche[k].load>woche[k].cap+0.05;}).length};});
+      return out;},[employees,loadMap,absenceMap,span]);
+    // Fortschritt je BC und FC (wie die Ringe im Sprint-Sync; geschlossene WIs zaehlen mit)
+    var fortRep=useMemo(function(){
+      function stand(pk){var plan=0,fertig=0,rest=0,n=0,z=0;
+        pk.forEach(function(p){if(!p)return;n++;var h=Number(p.hours)||0,r=p.remainingHours!=null?Number(p.remainingHours)||0:h;
+          if(p.lcs==="closed"){z++;fertig+=h;}else{fertig+=Math.max(0,h-r);rest+=r;}plan+=h;});
+        return {q:plan>0?Math.max(0,Math.min(1,fertig/plan)):(n?z/n:0),plan:plan,rest:rest,n:n,z:z};}
+      return (activeReleases||[]).map(function(rel){
+        var da={},alle=(rel.directPackages||[]).slice();(rel.components||[]).forEach(function(c){alle=alle.concat(c.packages||[]);});
+        alle.forEach(function(p){if(p)da[p.id]=1;});
+        var zu=(closedWis||[]).filter(function(c){return c.bc===rel.name&&!da[c.id];}).map(function(c){return {id:c.id,hours:c.h,remainingHours:0,lcs:"closed",fc:c.fc};});
+        var fcs=(rel.components||[]).map(function(c){return Object.assign({name:c.name,due:c.dueDate||""},stand((c.packages||[]).concat(zu.filter(function(q){return q.fc===c.name;}))));});
+        return Object.assign({name:rel.name,due:rel.dueDate||"",fcs:fcs},stand(alle.concat(zu)));});
+    },[activeReleases,closedWis]);
+    // Sprint-Bilanz je Takt (gemeinsam + Gruppen): eingeplant, erledigt, uebertragen, liegen geblieben
+    var sprBil=useMemo(function(){var heute=dateStr(new Date()),out=[];
+      var takte=[["gemeinsam",sprCfg]].concat(Object.keys(sprCfg.takte||{}).filter(function(g){return (sprCfg.gruppen||{})[g];}).map(function(g){return [g,sprTaktCfg(sprCfg,g)];}));
+      takte.forEach(function(T){var c=T[1],L=sprListe(c,heute),zu=c.zu||{};
+        L.filter(function(x){return x.start<=heute;}).slice(-6).forEach(function(x){var ein=0,erl=0,weiter=0,liegen=0,n=0;
+          Object.keys(zu).forEach(function(id){var h=zu[id][x.nr];if(h==null)return;n++;h=Number(h)||0;ein+=h;
+            var p=pkgById[id];if(!p||p.lcs==="closed"){erl+=h;return;}
+            if(Object.keys(zu[id]).some(function(k){return Number(k)>x.nr;}))weiter+=h;else if(x.ende<heute)liegen+=h;});
+          out.push({takt:T[0],nr:x.nr,start:x.start,ende:x.ende,laeuft:x.ende>=heute,n:n,ein:ein,erl:erl,weiter:weiter,liegen:liegen});});});
+      return out;},[sprCfg,pkgById]);
+    // V-Status je Issue (aus der Lesekopie des V) und Datenqualitaet der offenen WIs
+    var vRep=useMemo(function(){try{return (vlLesekopie(vlauf,issueIdxRaw,releases,employees,"").auftraege||[]).filter(function(a){return a.schritte&&Object.keys(a.schritte).length;});}catch(e){return [];}},[vlauf,issueIdxRaw,releases,employees]);
+    var dq=useMemo(function(){var o=(allPkgs||[]).filter(function(p){return p&&p.lcs!=="closed";});
+      return {n:o.length,ohneRest:o.filter(function(p){return p.remainingHours==null;}),ohneMa:o.filter(function(p){return !p.employee;}),
+        ohneTermin:o.filter(function(p){return !p.end;}),ohneAufwand:o.filter(function(p){return !(Number(p.hours)>0)&&!(Number(p.remainingHours)>0);})};},[allPkgs]);
     var tot=useMemo(function(){
       return perEmp.reduce(function(a,r){
-        return {soll:a.soll+r.soll,ist:a.ist+r.ist,wd:a.wd+r.wd,abs:a.abs+r.abs,hol:a.hol+r.hol};
-      },{soll:0,ist:0,wd:0,abs:0,hol:0});
+        return {soll:a.soll+r.soll,wd:a.wd+r.wd,abs:a.abs+r.abs,hol:a.hol+r.hol};
+      },{soll:0,wd:0,abs:0,hol:0});
     },[perEmp]);
 
-    // Abrechnung: gebuchte Zeit nach Art
-    var bill=useMemo(function(){
-      var wi=0,acctB=0,acctI=0;
-      (timeEntries||[]).forEach(function(t){
-        if(!t.date||t.date<span.from||t.date>span.to)return;
-        var sec=t.seconds||0;
-        if(isAcctId(t.wiId)){ if(t.billable===false)acctI+=sec; else acctB+=sec; }
-        else wi+=sec;
-      });
-      return {wi:wi,acctB:acctB,acctI:acctI,billable:wi+acctB,total:wi+acctB+acctI};
-    },[timeEntries,span]);
-
-    // Gebuchte Zeit der letzten sechs Monate als Verlauf
-    var trend=useMemo(function(){
-      var out=[],b=monthBounds(rp.ym);
-      for(var i=5;i>=0;i--){
-        var d=new Date(b.y,b.m-i,1),ym=d.getFullYear()+"-"+tPad2(d.getMonth()+1);
-        var mb=monthBounds(ym),f=dateStr(mb.first),t2=dateStr(mb.last),sec=0;
-        (timeEntries||[]).forEach(function(t){
-          if(t.date&&t.date>=f&&t.date<=t2)sec+=(t.seconds||0);
-        });
-        out.push({ym:ym,label:monthLabel(ym),sec:sec});
-      }
-      return out;
-    },[timeEntries,rp]);
 
     var delays=useMemo(function(){return bcDelays(activeReleases,capEndMapOf(analysis));},[activeReleases,analysis]);
     var late=delays.filter(function(d){return d.late;});
 
     var sheet={background:A.surface,border:"1px solid "+A.border,borderRadius:"var(--r-xl)",padding:18};
     var h2={fontSize:"var(--fs-base)",fontWeight:800,color:A.text,marginBottom:10};
+    var nhR=function(v){return (Math.round((Number(v)||0)*10)/10).toLocaleString("de-DE");};
     var th={textAlign:"left",padding:"6px 8px",borderBottom:"1.5px solid "+A.border,fontSize:"var(--fs-2xs)",
       fontWeight:800,color:A.textLight,textTransform:"uppercase",letterSpacing:0.5,whiteSpace:"nowrap"};
     var td={padding:"5px 8px",fontSize:"var(--fs-sm)",borderBottom:"1px solid "+A.border};
@@ -10783,7 +10793,7 @@ function Planungstool(){
           ? React.createElement("div",{style:{fontSize:"var(--fs-md)",color:A.textLight}},"Keine Mitarbeiter importiert.")
           : React.createElement("table",{style:{width:"100%",borderCollapse:"collapse"}},
               React.createElement("thead",null,React.createElement("tr",null,
-                ["Mitarbeiter","Abteilung","AT","Feiertage","Abwesend","Soll"]  /* v3.31.0: ohne erfasste Zeit */
+                ["Mitarbeiter","Abteilung","AT","Feiertage","Abwesend","Soll","Geplant","Quote","\u00dcberlast-Wo."]  /* v3.32.0: Plan statt erfasster Zeit */
                 .map(function(h,i){return React.createElement("th",{key:i,
                   style:Object.assign({},th,{textAlign:i>=2?"right":"left"})},h);})
               )),
@@ -10795,7 +10805,11 @@ function Planungstool(){
                     React.createElement("td",{style:num},String(r.wd)),
                     React.createElement("td",{style:num},String(r.hol)),
                     React.createElement("td",{style:num},String(r.abs)),
-                    React.createElement("td",{style:num},secToHHMM(r.soll))
+                    React.createElement("td",{style:num},secToHHMM(r.soll)),
+                    (function(){var pj=planJe[r.id]||{plan:0,ueber:0},sh=r.soll/3600,q=sh>0?Math.round(pj.plan/sh*100):0;
+                      return [React.createElement("td",{key:"g",style:num},secToHHMM(Math.round(pj.plan*3600))),
+                        React.createElement("td",{key:"q","data-rep-quote":r.id,style:Object.assign({},num,{fontWeight:800,color:sh<=0?A.textLight:q>100?A.coral:q>=85?A.green:A.amber})},sh>0?q+" %":"\u2014"),
+                        React.createElement("td",{key:"u",style:Object.assign({},num,{color:pj.ueber?A.coral:A.textLight,fontWeight:pj.ueber?800:400})},String(pj.ueber))];})()
                   );
                 }),
                 React.createElement("tr",{"data-rep-total":"1",style:{background:A.bg}},
@@ -10804,7 +10818,11 @@ function Planungstool(){
                   React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},String(tot.wd)),
                   React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},String(tot.hol)),
                   React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},String(tot.abs)),
-                  React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},secToHHMM(tot.soll))
+                  React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},secToHHMM(tot.soll)),
+                  (function(){var pl=perEmp.reduce(function(a,r){return a+((planJe[r.id]||{}).plan||0);},0),sh=tot.soll/3600;
+                    return [React.createElement("td",{key:"g",style:Object.assign({},num,{fontWeight:800})},secToHHMM(Math.round(pl*3600))),
+                      React.createElement("td",{key:"q",style:Object.assign({},num,{fontWeight:800})},sh>0?Math.round(pl/sh*100)+" %":"\u2014"),
+                      React.createElement("td",{key:"u",style:num},"")];})()
                 )
               )
             )
@@ -10847,8 +10865,70 @@ function Planungstool(){
             )
       ),
 
+      // v3.32.0: Fortschritt je BC/FC
+      React.createElement("div",{className:"report-block","data-rep-fortschritt":"1",style:sheet},
+        React.createElement("div",{style:h2},"Fortschritt je BC und FC"),
+        !fortRep.length?React.createElement("div",{style:{fontSize:"var(--fs-md)",color:A.textLight}},"Keine BCs importiert."):
+        React.createElement("table",{style:{width:"100%",borderCollapse:"collapse"}},
+          React.createElement("thead",null,React.createElement("tr",null,["BC / FC","Liefertermin","WI erledigt","Plan h","Rest h","Fortschritt"].map(function(h,i){
+            return React.createElement("th",{key:i,style:Object.assign({},th,{textAlign:i>=2?"right":"left"})},h);}))),
+          React.createElement("tbody",null,fortRep.map(function(b){
+            function zeile(x,fc){var pr=Math.round(x.q*100);
+              return React.createElement("tr",{key:(fc?"fc:":"bc:")+x.name,"data-rep-fort":x.name,style:fc?null:{background:A.bg}},
+                React.createElement("td",{style:Object.assign({},td,fc?{paddingLeft:22}:{fontWeight:800})},x.name),
+                React.createElement("td",{style:Object.assign({},td,{color:A.textLight})},x.due||"\u2014"),
+                React.createElement("td",{style:num},x.z+"/"+x.n),
+                React.createElement("td",{style:num},nhR(x.plan)),
+                React.createElement("td",{style:num},nhR(x.rest)),
+                React.createElement("td",{style:Object.assign({},num,{fontWeight:800})},
+                  React.createElement("span",{style:{display:"inline-block",width:60,height:6,borderRadius:3,background:A.border,marginRight:6,verticalAlign:"middle",overflow:"hidden"}},
+                    React.createElement("span",{style:{display:"block",width:pr+"%",height:"100%",background:A.mint}})),pr+" %"));}
+            return [zeile(b,false)].concat(b.fcs.map(function(f){return zeile(f,true);}));}).reduce(function(a,b){return a.concat(b);},[])))),
+      // v3.32.0: Sprint-Bilanz
+      React.createElement("div",{className:"report-block","data-rep-sprints":"1",style:sheet},
+        React.createElement("div",{style:h2},"Sprint-Bilanz"),
+        !sprBil.length?React.createElement("div",{style:{fontSize:"var(--fs-md)",color:A.textLight}},"Noch keine Sprints geplant."):
+        React.createElement("table",{style:{width:"100%",borderCollapse:"collapse"}},
+          React.createElement("thead",null,React.createElement("tr",null,["Takt","Sprint","Zeitraum","WI","Eingeplant h","Erledigt h","\u00dcbertragen h","Liegen geblieben h","Quote"].map(function(h,i){
+            return React.createElement("th",{key:i,style:Object.assign({},th,{textAlign:i>=3?"right":"left"})},h);}))),
+          React.createElement("tbody",null,sprBil.map(function(x){var q=x.ein>0?Math.round(x.erl/x.ein*100):0;
+            return React.createElement("tr",{key:x.takt+x.nr,"data-rep-sprint":x.takt+"|"+x.nr},
+              React.createElement("td",{style:td},x.takt),
+              React.createElement("td",{style:td},"S"+x.nr+(x.laeuft?" \u00b7 l\u00e4uft":"")),
+              React.createElement("td",{style:Object.assign({},td,{color:A.textLight})},x.start.slice(8,10)+"."+x.start.slice(5,7)+".\u2013"+x.ende.slice(8,10)+"."+x.ende.slice(5,7)+"."),
+              React.createElement("td",{style:num},String(x.n)),
+              React.createElement("td",{style:num},nhR(x.ein)),
+              React.createElement("td",{style:num},nhR(x.erl)),
+              React.createElement("td",{style:num},nhR(x.weiter)),
+              React.createElement("td",{style:Object.assign({},num,{color:x.liegen?A.coral:A.textLight})},nhR(x.liegen)),
+              React.createElement("td",{style:Object.assign({},num,{fontWeight:800,color:x.laeuft?A.textMid:q>=85?A.green:q>=60?A.amber:A.coral})},x.ein>0?q+" %":"\u2014"));})))),
+      // v3.32.0: V-Status je Issue
+      React.createElement("div",{className:"report-block","data-rep-v":"1",style:sheet},
+        React.createElement("div",{style:h2},"V-Status je Issue"),
+        !vRep.length?React.createElement("div",{style:{fontSize:"var(--fs-md)",color:A.textLight}},"Kein Issue im V geplant."):
+        React.createElement("table",{style:{width:"100%",borderCollapse:"collapse"}},
+          React.createElement("thead",null,React.createElement("tr",null,["Issue"].concat(VL_SCHRITTE.map(function(x){return x.k;})).concat(["Testf\u00e4lle"]).map(function(h,i){
+            return React.createElement("th",{key:i,style:Object.assign({},th,{textAlign:i>=1?"center":"left"})},h);}))),
+          React.createElement("tbody",null,vRep.map(function(a){var sch=a.schritte||{},s1=sch["SWE.1"]&&sch["SWE.1"].testfaelle;
+            var FARBE={closed:[A.green,"\u2713"],started:[A.amber,"\u25d0"],blocked:[A.coral,"!"],"new":[A.textLight,"\u25cb"]};
+            return React.createElement("tr",{key:a.id,"data-rep-issue":a.id},
+              React.createElement("td",{style:td},React.createElement("b",null,a.id),React.createElement("span",{style:{color:A.textLight}}," "+(a.titel||"").slice(0,50))),
+              VL_SCHRITTE.map(function(x){var z=sch[x.k],f=z?(FARBE[z.status]||FARBE["new"]):null;
+                return React.createElement("td",{key:x.k,title:z?x.n+": "+z.status:x.n+": nicht geplant",style:Object.assign({},td,{textAlign:"center",fontWeight:800,color:f?f[0]:A.border})},f?f[1]:"\u00b7");}),
+              React.createElement("td",{style:Object.assign({},num,{textAlign:"center",color:s1&&s1.mit<s1.n?A.coral:A.textMid})},s1?s1.mit+"/"+s1.n:"\u2014"));})))),
+      // v3.32.0: Datenqualitaet
+      React.createElement("div",{className:"report-block","data-rep-dq":"1",style:sheet},
+        React.createElement("div",{style:h2},"Datenqualit\u00e4t der offenen Workitems"),
+        React.createElement("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
+          [["Ohne Restaufwand (Rem_Eff)",dq.ohneRest],["Ohne Bearbeiter",dq.ohneMa],["Ohne Endtermin",dq.ohneTermin],["Ohne Aufwand",dq.ohneAufwand]].map(function(b){
+            return React.createElement("div",{key:b[0],"data-rep-dq-feld":b[0],title:b[1].slice(0,30).map(function(p){return p.id+" "+(p.title||"");}).join("\n"),
+              style:{flex:1,minWidth:150,padding:"9px 12px",borderRadius:"var(--r-lg)",background:A.bg,border:"1px solid "+A.border}},
+              React.createElement("div",{style:{fontSize:"var(--fs-2xs)",fontWeight:800,color:A.textLight,textTransform:"uppercase",letterSpacing:0.5}},b[0]),
+              React.createElement("div",{style:{fontSize:"var(--fs-xl)",fontWeight:800,marginTop:3,fontFamily:"var(--font-mono)",color:b[1].length?A.coral:A.green}},b[1].length+" / "+dq.n),
+              b[1].length?React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textMid,marginTop:3}},b[1].slice(0,4).map(function(p){return p.id;}).join(", ")+(b[1].length>4?" \u2026":"")):null);}))),
+
       React.createElement("div",{style:{fontSize:"var(--fs-2xs)",color:A.textLight,lineHeight:1.6}},
-        "Soll = Arbeitstage \u00d7 Tageskapazit\u00e4t je Mitarbeiter, abz\u00fcglich Feiertagen und Abwesenheiten. ",
+        "Soll = Arbeitstage \u00d7 Tageskapazit\u00e4t je Mitarbeiter, abz\u00fcglich Feiertagen und Abwesenheiten. Geplant = Restaufwand der offenen Workitems, verteilt auf ihren Planzeitraum (wie die Heatmap). Fortschritt = erledigter Aufwand (geschlossen oder Aufwand minus Rest) durch Planaufwand. Sprint-Bilanz: erledigt = Workitem inzwischen geschlossen, \u00fcbertragen = auch im n\u00e4chsten Sprint, liegen geblieben = offen und in keinem sp\u00e4teren Sprint. ",
         "Prognose = sp\u00e4testes berechnetes Ende eines offenen Workitems (wie im Termin-Radar). Verzug in Arbeitstagen gegen den BC-Termin.")
     );
   }
