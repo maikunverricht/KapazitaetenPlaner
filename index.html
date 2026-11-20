@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.24.0";
+var APP_VERSION="3.25.0";
+// v3.25.0: Sprints fuer mehrere Teams parallel planen (Maik) -- Teams oben an-/abwaehlen, Liste und Sprints zeigen alle gewaehlten, Last je Team im Sprint.
 // v3.24.0: Dashboard passt auf eine Seite (Maik) -- Raster in der freien Hoehe, M0 zwei Zeilen, Inhalt rollt in der Kachel; schmal (<700px) oder zu eng rollt die Seite wie bisher.
 // v3.23.0: Anmeldung einmal am Tag (Maik) -- der Name aus dem Startbildschirm gilt bis Mitternacht; "Name wechseln" fragt neu.
 // v3.22.2: Dashboard M0 -- Zeile "Startet bis" entfaellt (Maik); in der Start-Uebersicht bleibt sie.
@@ -4796,12 +4797,12 @@ function vlWid(vl,iid,k,name){
    ptool_sprints = {start:"JJJJ-MM-TT", wochen:2, ende:{nr:"JJJJ-MM-TT"}, zu:{pkgId:{nr:h}}}
    Sprint n beginnt am Tag nach dem Ende von n-1; "ende" verschiebt nur diesen Sprint. */
 var SPR_KEY="ptool_sprints";
-function sprLeer(){return {start:"",wochen:2,ende:{},zu:{},team:"",mitglied:{},sync:{}};}
+function sprLeer(){return {start:"",wochen:2,ende:{},zu:{},team:"",teams:[],mitglied:{},sync:{}};}
 function sprLaden(){var v=null;try{v=JSON.parse(localStorage.getItem(SPR_KEY)||"null");}catch(e){}
   if(!v||typeof v!=="object"||Array.isArray(v))return sprLeer();
   return {start:typeof v.start==="string"?v.start:"",wochen:Math.max(1,Math.min(6,Number(v.wochen)||2)),
     ende:v.ende&&typeof v.ende==="object"?v.ende:{},zu:v.zu&&typeof v.zu==="object"?v.zu:{},
-    team:typeof v.team==="string"?v.team:"",mitglied:v.mitglied&&typeof v.mitglied==="object"&&!Array.isArray(v.mitglied)?v.mitglied:{},
+    team:typeof v.team==="string"?v.team:"",teams:Array.isArray(v.teams)?v.teams.filter(function(t){return typeof t==="string";}):[],mitglied:v.mitglied&&typeof v.mitglied==="object"&&!Array.isArray(v.mitglied)?v.mitglied:{},
     sync:v.sync&&typeof v.sync==="object"&&!Array.isArray(v.sync)?v.sync:{}};}
 /* v3.7.0: Team eines Mitarbeiters -- eigene Zuordnung vor Abteilung */
 function sprTeamVon(cfg,emp){if(!emp)return "";var m=cfg&&cfg.mitglied&&cfg.mitglied[emp.id];return m||emp.department||"Ohne Abteilung";}
@@ -10087,8 +10088,14 @@ function Planungstool(){
     var s_vz=useState(false);var verplZeig=s_vz[0],setVerplZeig=s_vz[1];
     var alleEmps=employees.filter(function(e){return !hiddenEmp[e.name];});
     var teams=sprTeams(cfg,alleEmps);
-    var team=teams.indexOf(cfg.team)>=0?cfg.team:(selfEmp&&teams.indexOf(sprTeamVon(cfg,selfEmp))>=0?sprTeamVon(cfg,selfEmp):(teams[0]||""));
-    var teamEmps=alleEmps.filter(function(e){return sprTeamVon(cfg,e)===team;});
+    var team0=teams.indexOf(cfg.team)>=0?cfg.team:(selfEmp&&teams.indexOf(sprTeamVon(cfg,selfEmp))>=0?sprTeamVon(cfg,selfEmp):(teams[0]||""));
+    // v3.25.0 (Maik): mehrere Teams parallel planen -- cfg.teams = Auswahl, cfg.team = erstes (Lesekopie, Kontor)
+    var wahlT=(cfg.teams||[]).filter(function(t){return teams.indexOf(t)>=0;});if(!wahlT.length)wahlT=team0?[team0]:[];
+    var mehrT=wahlT.length>1,team=wahlT.join(" + ");
+    function teamUmschalten(t){aendern(function(n){var l=(n.teams&&n.teams.length?n.teams:wahlT).slice();var i=l.indexOf(t);
+      if(i>=0){if(l.length>1)l.splice(i,1);}else l.push(t);
+      l=teams.filter(function(x){return l.indexOf(x)>=0;});n.teams=l;n.team=l[0]||"";});}
+    var teamEmps=alleEmps.filter(function(e){return wahlT.indexOf(sprTeamVon(cfg,e))>=0;});
     var imTeam={};teamEmps.forEach(function(e){imTeam[e.id]=true;});
     var mitglieder=React.createElement("div",{"data-spr-mitglieder":"1",style:{marginBottom:12,padding:"10px 12px",border:"1px solid "+A.border,borderRadius:"var(--r-lg)",background:A.surface,maxWidth:760}},
       React.createElement("div",{style:{display:"flex",gap:8,alignItems:"baseline",marginBottom:6}},
@@ -10126,9 +10133,13 @@ function Planungstool(){
       React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},"Anzeigen",
         React.createElement("select",{value:zeig,onChange:function(e){setZeig(Number(e.target.value));},style:ein},[2,3,4,6,8].map(function(z){return React.createElement("option",{key:z,value:z},z+" Sprints");}))),
       aktI>0?React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},React.createElement("input",{type:"checkbox",checked:vor>0,onChange:function(e){setVor(e.target.checked?1:0);}}),"vorigen Sprint zeigen"):null,
-      React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},"Team",
-        React.createElement("select",{value:team,"data-spr-team":"1",onChange:function(e){var v=e.target.value;aendern(function(n){n.team=v;});},style:Object.assign({},ein,{fontWeight:700})},
-          teams.map(function(t){return React.createElement("option",{key:t,value:t},t);}))),
+      React.createElement("div",{role:"group","aria-label":"Teams","data-spr-team":"1",style:Object.assign({},kl,{display:"inline-flex",gap:4,alignItems:"center",flexWrap:"wrap"})},
+        React.createElement("span",{style:{marginRight:2}},"Teams"),
+        teams.map(function(t){var an=wahlT.indexOf(t)>=0;
+          return React.createElement("button",{key:t,type:"button","data-spr-team-wahl":t,"aria-pressed":an?"true":"false",
+            title:an?(wahlT.length>1?"Team abw\u00e4hlen":"mindestens ein Team bleibt gew\u00e4hlt"):"Team dazunehmen",
+            onClick:function(){teamUmschalten(t);},
+            style:Object.assign({},ein,{cursor:"pointer",fontWeight:an?700:500,borderColor:an?A.mint:A.border,background:an?A.mintLight:A.surface,color:an?A.mintInk:A.textMid,borderRadius:999,padding:"3px 10px"})},(an?"\u2713 ":"")+t);})),
       React.createElement("button",{type:"button","data-spr-mg-knopf":"1",onClick:function(){setMgOffen(!mgOffen);},style:knopf},mgOffen?"Teams schlie\u00dfen":"Teams zuordnen"),
       React.createElement("span",{style:kl},"Sprintzeiten gelten f\u00fcr alle Teams, Inhalte je Team. Ende eines Sprints \u00e4nderbar; der n\u00e4chste beginnt am Tag danach."));
     if(mgOffen)kopf=React.createElement(React.Fragment,null,kopf,mitglieder);
@@ -10182,7 +10193,7 @@ function Planungstool(){
               m[0]?React.createElement("span",{style:{fontSize:"var(--fs-2xs)",fontWeight:700,color:m[1]}},m[0]):null,
               meldIds[p.id]?React.createElement("span",{title:meldIds[p.id],style:{fontSize:"var(--fs-2xs)",color:A.amber}},"\u26a0 umplanen"):null),
             React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},p.title||p.id),
-            React.createElement("div",{style:kl},empName(p.employee)+(p.cn?" \u00b7 "+p.cn:p.rn?" \u00b7 "+p.rn:"")+(p.end?" \u00b7 Plan bis "+tg(p.end):""))),
+            React.createElement("div",{style:kl},(mehrT?"["+sprTeamVon(cfg,employees.find(function(x){return x.id===p.employee;}))+"] ":"")+empName(p.employee)+(p.cn?" \u00b7 "+p.cn:p.rn?" \u00b7 "+p.rn:"")+(p.end?" \u00b7 Plan bis "+tg(p.end):""))),
           React.createElement("div",{style:{textAlign:"right"}},
             React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.text}},nh(r)+" h"),
             React.createElement("div",{style:Object.assign({},kl,{color:v>=r&&r>0?A.green:v>0?A.amber:A.textLight})},v?(v>=r?"verplant":nh(r-v)+" h offen"):"nicht im Sprint"),
@@ -10209,6 +10220,13 @@ function Planungstool(){
           React.createElement("div",{style:{height:8,borderRadius:4,background:A.border,margin:"8px 0 3px",overflow:"hidden"}},
             React.createElement("div",{style:{width:Math.min(100,quote*100)+"%",height:"100%",background:quote>1?A.coral:quote>0.85?A.amber:A.mint}})),
           React.createElement("div",{style:Object.assign({},kl,{marginBottom:6})},nh(last)+" h von "+nh(kap)+" h Kapazit\u00e4t \u00b7 "+ids.length+" Workitems"),
+          // v3.25.0: bei mehreren Teams Last je Team
+          mehrT?React.createElement("div",{"data-spr-teamlast":"1",style:{display:"grid",gap:2,marginBottom:6}},wahlT.map(function(t){
+            var es=emps.filter(function(e){return sprTeamVon(cfg,e)===t;}),k=es.reduce(function(a,e){return a+kapJe[e.id];},0),l=es.reduce(function(a,e){return a+lastJe[e.id];},0),q=k?l/k:0;
+            return React.createElement("div",{key:t,style:Object.assign({},kl,{display:"flex",gap:6,alignItems:"center"})},
+              React.createElement("span",{style:{flex:"0 0 auto",minWidth:70,fontWeight:700,color:A.text}},t),
+              React.createElement("span",{style:{flex:1,height:5,borderRadius:3,background:A.border,overflow:"hidden"}},React.createElement("span",{style:{display:"block",width:Math.min(100,q*100)+"%",height:"100%",background:q>1?A.coral:q>0.85?A.amber:A.mint}})),
+              React.createElement("span",{style:{whiteSpace:"nowrap"}},nh(l)+"/"+nh(k)+" h"));})):null,
           (function(){
             // v3.13.0: je Bearbeiter
             function wiZeile(id){var p=pkgById[id];
