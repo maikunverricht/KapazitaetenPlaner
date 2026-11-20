@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.26.0";
+var APP_VERSION="3.27.0";
+// v3.27.0: Separate Sprints je Gruppe (Maik) -- eigener Takt (Start, Laenge, Enden, Inhalte, Sync) in cfg.takte; beim Anlegen kopiert vom gemeinsamen Takt; Meldungen ueber alle Takte.
 // v3.26.0: Sprints -- gewaehlte Teams als Gruppe unter eigenem Namen speichern (Maik); ein Klick waehlt die Gruppe, Titel zeigt ihren Namen.
 // v3.25.0: Sprints fuer mehrere Teams parallel planen (Maik) -- Teams oben an-/abwaehlen, Liste und Sprints zeigen alle gewaehlten, Last je Team im Sprint.
 // v3.24.0: Dashboard passt auf eine Seite (Maik) -- Raster in der freien Hoehe, M0 zwei Zeilen, Inhalt rollt in der Kachel; schmal (<700px) oder zu eng rollt die Seite wie bisher.
@@ -4807,6 +4808,26 @@ function sprLaden(){var v=null;try{v=JSON.parse(localStorage.getItem(SPR_KEY)||"
     sync:v.sync&&typeof v.sync==="object"&&!Array.isArray(v.sync)?v.sync:{}};}
 /* v3.7.0: Team eines Mitarbeiters -- eigene Zuordnung vor Abteilung */
 function sprTeamVon(cfg,emp){if(!emp)return "";var m=cfg&&cfg.mitglied&&cfg.mitglied[emp.id];return m||emp.department||"Ohne Abteilung";}
+/* v3.27.0 (Maik): "Separate Sprints fuer jede Gruppe". Jede Gruppe hat ihren eigenen Takt
+   cfg.takte[Gruppe] = {start,wochen,ende,zu,sync}; Teams ohne gewaehlte Gruppe planen im
+   gemeinsamen Takt (cfg selbst). sprTaktCfg liefert die Sicht einer Gruppe als cfg. */
+var SPR_TAKT=["start","wochen","ende","zu","sync"];
+function sprTaktCfg(cfg,g){var t=(cfg.takte&&cfg.takte[g])||{};
+  return Object.assign({},cfg,{start:typeof t.start==="string"?t.start:"",wochen:Math.max(1,Math.min(6,Number(t.wochen)||2)),
+    ende:t.ende&&typeof t.ende==="object"?t.ende:{},zu:t.zu&&typeof t.zu==="object"?t.zu:{},sync:t.sync&&typeof t.sync==="object"?t.sync:{}});}
+function sprGruppeAkt(cfg,teams,wahlT){var gr=cfg.gruppen||{};
+  return Object.keys(gr).filter(function(g){var l=(gr[g]||[]).filter(function(t){return teams.indexOf(t)>=0;});
+    return l.length===wahlT.length&&l.every(function(t){return wahlT.indexOf(t)>=0;});})[0]||"";}
+function sprWahlTeams(cfg,teams,selfTeam){var t0=teams.indexOf(cfg.team)>=0?cfg.team:(selfTeam&&teams.indexOf(selfTeam)>=0?selfTeam:(teams[0]||""));
+  var w=(cfg.teams||[]).filter(function(t){return teams.indexOf(t)>=0;});return w.length?w:(t0?[t0]:[]);}
+/* Meldungen ueber alle Takte: gemeinsamer Takt plus je Gruppe (nur deren Mitarbeiter) */
+function sprMeldAlle(cfg,pkgs,analysis,heute,emps){
+  var out=sprMeldungen(cfg,pkgs,analysis,heute,emps);
+  Object.keys(cfg.takte||{}).forEach(function(g){var ts=(cfg.gruppen||{})[g];if(!ts)return;
+    var es=(emps||[]).filter(function(e){return ts.indexOf(sprTeamVon(cfg,e))>=0;}),ids={};es.forEach(function(e){ids[e.id]=1;});
+    sprMeldungen(sprTaktCfg(cfg,g),(pkgs||[]).filter(function(p){return p&&ids[p.employee];}),analysis,heute,es)
+      .forEach(function(m){m.gruppe=g;m.grund=g+" \u00b7 "+m.grund;out.push(m);});});
+  return out;}
 function sprTeams(cfg,emps){var t={};(emps||[]).forEach(function(e){t[sprTeamVon(cfg,e)]=true;});return Object.keys(t).sort(function(a,b){return a.localeCompare(b,"de");});}
 function sprTag(iso,n){var d=new Date(iso+"T00:00:00");d.setDate(d.getDate()+n);return dateStr(d);}
 function sprListe(cfg,bis){
@@ -8355,7 +8376,7 @@ function Planungstool(){
     setImpOpen(false);setBriefOpen(false);
     setEditPkg(impFind(id));setModal("editPkg");
   }
-  var sprMeld=useMemo(function(){return sprMeldungen(sprCfg,allPkgs,analysis,dateStr(new Date()),employees);},[sprCfg,allPkgs,analysis,employees]);
+  var sprMeld=useMemo(function(){return sprMeldAlle(sprCfg,allPkgs,analysis,dateStr(new Date()),employees);},[sprCfg,allPkgs,analysis,employees]); // v3.27.0: alle Takte
   var replanCount=analysis.filter(function(r){return r.status==="replan";}).length+sprMeld.length;
   // v3.15.1: Lesekopie der BC-Lieferungen
   useEffect(function(){
@@ -8391,7 +8412,7 @@ function Planungstool(){
         var kap=emps.reduce(function(s,e){return s+sprKap(e,absenceMap,akt.start,akt.ende);},0);
         var ueber=emps.filter(function(e){var h=offen.filter(function(id){return pkgById[id].employee===e.id;}).reduce(function(s,id){return s+(Number(sprCfg.zu[id][akt.nr])||0);},0);
           return h>sprKap(e,absenceMap,akt.start,akt.ende);}).length;
-        var melden=sprMeld.filter(function(m){return m.sprint.nr===akt.nr&&!!drin[m.p.employee];}).length;
+        var melden=sprMeld.filter(function(m){return !m.gruppe&&m.sprint.nr===akt.nr&&!!drin[m.p.employee];}).length;
         return {team:team,n:ids.length,offen:offen.length,erledigt:ids.length-offen.length,geplant:r1(geplant),kap:r1(kap),ueber:ueber,melden:melden};}
       var teams=sprTeams(sprCfg,alle),wahl=teams.indexOf(sprCfg.team)>=0?sprCfg.team:(teams[0]||"");
       var a=je(wahl);
@@ -10065,7 +10086,10 @@ function Planungstool(){
   }
   function SprintsView(){
     var heute=dateStr(new Date());
-    var cfg=sprCfg,L=sprListe(cfg,sprTag(heute,400));
+    // v3.27.0: ist eine Gruppe gewaehlt, gilt ihr eigener Takt
+    var alleEmps0=employees.filter(function(e){return !hiddenEmp[e.name];}),teams0=sprTeams(sprCfg,alleEmps0);
+    var gTakt=sprGruppeAkt(sprCfg,teams0,sprWahlTeams(sprCfg,teams0,selfEmp?sprTeamVon(sprCfg,selfEmp):""));
+    var cfg=gTakt?sprTaktCfg(sprCfg,gTakt):sprCfg,L=sprListe(cfg,sprTag(heute,400));
     var aktI=L.findIndex(function(x){return x.ende>=heute;});if(aktI<0)aktI=Math.max(0,L.length-1);
     var s_zeig=useState(4);var zeig=s_zeig[0],setZeig=s_zeig[1];
     var s_vor=useState(0);var vor=s_vor[0],setVor=s_vor[1];
@@ -10076,7 +10100,14 @@ function Planungstool(){
     var nh=function(v){return (Math.round(v*10)/10).toLocaleString("de-DE");};
     var tg=function(iso){return iso?iso.slice(8,10)+"."+iso.slice(5,7)+".":"";};
     var empName=function(id){var e=employees.find(function(x){return x.id===id;});return e?e.name:"";};
-    function aendern(fn){setSprCfg(function(c){var n=JSON.parse(JSON.stringify(c));fn(n);return n;});}
+    function aendern(fn){setSprCfg(function(c){var n=JSON.parse(JSON.stringify(c));
+      if(!gTakt){fn(n);return n;}
+      /* Gruppe gewaehlt: Takt-Felder in n.takte[Gruppe], alles andere (Teams, Gruppen, Mitglieder) in n */
+      var v=sprTaktCfg(n,gTakt);fn(v);
+      if(!n.takte)n.takte={};var t={};SPR_TAKT.forEach(function(k){t[k]=v[k];});
+      Object.keys(v).forEach(function(k){if(SPR_TAKT.indexOf(k)<0&&k!=="takte")n[k]=v[k];});
+      if(n.gruppen&&n.gruppen[gTakt])n.takte[gTakt]=t;else if(n.takte)delete n.takte[gTakt];
+      return n;});}
     var zu=cfg.zu||{};
     // v3.7.0: Team waehlen -- Liste, Karten und Kapazitaet nur fuer dieses Team
     var s_mg=useState(false);var mgOffen=s_mg[0],setMgOffen=s_mg[1];
@@ -10089,18 +10120,23 @@ function Planungstool(){
     var s_vz=useState(false);var verplZeig=s_vz[0],setVerplZeig=s_vz[1];
     var alleEmps=employees.filter(function(e){return !hiddenEmp[e.name];});
     var teams=sprTeams(cfg,alleEmps);
-    var team0=teams.indexOf(cfg.team)>=0?cfg.team:(selfEmp&&teams.indexOf(sprTeamVon(cfg,selfEmp))>=0?sprTeamVon(cfg,selfEmp):(teams[0]||""));
+    var team0=sprWahlTeams(cfg,teams,selfEmp?sprTeamVon(cfg,selfEmp):"")[0]||"";
     // v3.25.0 (Maik): mehrere Teams parallel planen -- cfg.teams = Auswahl, cfg.team = erstes (Lesekopie, Kontor)
     var wahlT=(cfg.teams||[]).filter(function(t){return teams.indexOf(t)>=0;});if(!wahlT.length)wahlT=team0?[team0]:[];
     // v3.26.0 (Maik): gewaehlte Teams unter eigenem Namen zusammenfassen -- cfg.gruppen = {Name:[Teams]}
     var gruppen=cfg.gruppen||{};
-    var gruppeAkt=Object.keys(gruppen).filter(function(g){var l=(gruppen[g]||[]).filter(function(t){return teams.indexOf(t)>=0;});
-      return l.length===wahlT.length&&l.every(function(t){return wahlT.indexOf(t)>=0;});})[0]||"";
+    var gruppeAkt=sprGruppeAkt(cfg,teams,wahlT);
     var mehrT=wahlT.length>1,team=gruppeAkt||wahlT.join(" + ");
     var s_gn=useState(null);var gruppeNeu=s_gn[0],setGruppeNeu=s_gn[1];
     function gruppeWaehlen(g){aendern(function(n){var l=teams.filter(function(t){return (n.gruppen[g]||[]).indexOf(t)>=0;});if(l.length){n.teams=l;n.team=l[0];}});}
-    function gruppeSpeichern(name){name=String(name||"").trim();if(!name)return;aendern(function(n){if(!n.gruppen)n.gruppen={};n.gruppen[name]=wahlT.slice();});setGruppeNeu(null);}
-    function gruppeLoeschen(g){aendern(function(n){if(n.gruppen)delete n.gruppen[g];});}
+    function gruppeSpeichern(name){name=String(name||"").trim();if(!name)return;
+      var ts=wahlT.slice(),ids={};alleEmps.forEach(function(e){if(ts.indexOf(sprTeamVon(cfg,e))>=0)ids[e.id]=1;});
+      setSprCfg(function(c){var n=JSON.parse(JSON.stringify(c));if(!n.gruppen)n.gruppen={};n.gruppen[name]=ts;
+        /* eigener Takt: startet wie der gemeinsame, mit den schon eingeplanten Workitems der Gruppe */
+        if(!n.takte)n.takte={};if(!n.takte[name]){var z={};Object.keys(n.zu||{}).forEach(function(id){var p=pkgById[id];if(p&&ids[p.employee])z[id]=JSON.parse(JSON.stringify(n.zu[id]));});
+          n.takte[name]={start:n.start||"",wochen:n.wochen||2,ende:JSON.parse(JSON.stringify(n.ende||{})),zu:z,sync:{}};}
+        return n;});setGruppeNeu(null);}
+    function gruppeLoeschen(g){setSprCfg(function(c){var n=JSON.parse(JSON.stringify(c));if(n.gruppen)delete n.gruppen[g];if(n.takte)delete n.takte[g];return n;});}
     function teamUmschalten(t){aendern(function(n){var l=(n.teams&&n.teams.length?n.teams:wahlT).slice();var i=l.indexOf(t);
       if(i>=0){if(l.length>1)l.splice(i,1);}else l.push(t);
       l=teams.filter(function(x){return l.indexOf(x)>=0;});n.teams=l;n.team=l[0]||"";});}
@@ -10150,7 +10186,7 @@ function Planungstool(){
               onClick:function(){gruppeWaehlen(g);},
               style:Object.assign({},ein,{cursor:"pointer",fontWeight:700,borderColor:an?A.violet:A.border,background:an?A.violetLight:A.surface,color:an?A.violet:A.textMid,borderRadius:"999px 0 0 999px",padding:"3px 10px"})},"\u25a3 "+g),
             React.createElement("button",{type:"button","data-spr-gruppe-weg":g,"aria-label":"Gruppe "+g+" l\u00f6schen",title:"Gruppe l\u00f6schen (Teams bleiben)",
-              onClick:function(){if(confirm("Gruppe \u201e"+g+"\u201c l\u00f6schen? Die Teams bleiben."))gruppeLoeschen(g);},
+              onClick:function(){if(confirm("Gruppe \u201e"+g+"\u201c mit ihren eigenen Sprints l\u00f6schen? Die Teams bleiben und planen wieder im gemeinsamen Takt."))gruppeLoeschen(g);},
               style:Object.assign({},ein,{cursor:"pointer",borderLeft:"none",borderColor:an?A.violet:A.border,borderRadius:"0 999px 999px 0",padding:"3px 7px",color:A.textLight})},"\u00d7"));}),
         teams.map(function(t){var an=wahlT.indexOf(t)>=0;
           return React.createElement("button",{key:t,type:"button","data-spr-team-wahl":t,"aria-pressed":an?"true":"false",
@@ -10164,7 +10200,7 @@ function Planungstool(){
               onChange:function(e){setGruppeNeu(e.target.value);},onKeyDown:function(e){if(e.key==="Escape")setGruppeNeu(null);},style:Object.assign({},ein,{width:150})}),
             React.createElement("button",{type:"submit",style:Object.assign({},ein,{cursor:"pointer",fontWeight:700})},"Speichern"))):null),
       React.createElement("button",{type:"button","data-spr-mg-knopf":"1",onClick:function(){setMgOffen(!mgOffen);},style:knopf},mgOffen?"Teams schlie\u00dfen":"Teams zuordnen"),
-      React.createElement("span",{style:kl},"Sprintzeiten gelten f\u00fcr alle Teams, Inhalte je Team. Ende eines Sprints \u00e4nderbar; der n\u00e4chste beginnt am Tag danach."));
+      React.createElement("span",{"data-spr-takt":gTakt||"gemeinsam",style:kl},gTakt?"Eigene Sprints der Gruppe \u201e"+gTakt+"\u201c \u2013 Start, L\u00e4nge und Inhalte gelten nur f\u00fcr sie. Ende eines Sprints \u00e4nderbar; der n\u00e4chste beginnt am Tag danach.":"Gemeinsamer Takt f\u00fcr alle Teams ohne gew\u00e4hlte Gruppe, Inhalte je Team. Ende eines Sprints \u00e4nderbar; der n\u00e4chste beginnt am Tag danach."));
     if(mgOffen)kopf=React.createElement(React.Fragment,null,kopf,mitglieder);
     if(!L.length)return React.createElement("div",{style:{padding:20,maxWidth:1100}},kopf,
       React.createElement("div",{style:{padding:30,color:A.textMid,border:"1px dashed "+A.border,borderRadius:"var(--r-lg)"}},"Lege oben fest, wann der erste Sprint beginnt und wie lang ein Sprint ist."));
