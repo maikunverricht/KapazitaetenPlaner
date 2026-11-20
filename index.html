@@ -2555,7 +2555,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.21.0";
+var APP_VERSION="3.21.1";
+// v3.21.1: Dashboard -- BC-Status nicht mehr unter "Heute" (M0), nur noch in M6 "Meine Business Cases".
 // v3.21.0: Testfaelle links im V (Maik): SWE.1 ist erst gruen, wenn jede L2/L3/L4 des Auftrags im TestcaseManager einen Testfall ihrer Ebene hat (spezifiziert genuegt); Anzeige "Testfaelle x/y" am Schritt.
 // v3.20.0: Planer- vs. CQ-Workitems (Maik): Solange es kein CQ-Workitem gibt, gelten die vom Planer; ein CQ-Workitem ersetzt die offenen Planer-Workitems seines Schritts (gleiche Rolle). Nach jedem Import automatisch, Schritt aus dem Titel (SWE.1-6); nicht Erkanntes bleibt zum Ziehen. Von Hand geloeste Zuordnungen bleiben geloest.
 // v3.6.1: SWE.4 = Unit-/Weakspottest im TestcaseManager (L4); CodeCompare ist Review des Funktionsentwurfs, kein Prozessschritt.
@@ -6480,7 +6481,7 @@ function BriefingList(p){
         React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.textMid,marginTop:3,lineHeight:1.3}},s.label));
     })):null;
   var ohne=p.ohne||{};
-  var rows=b.items.filter(function(it){return !ohne[it.k];}).map(function(it,i){
+  var rows=b.items.filter(function(it){return !ohne[it.k]&&!(ohne.bc&&it.k.indexOf("bc-")===0);})  /* v3.21.1: ohne.bc blendet alle BC-Zeilen aus */.map(function(it,i){
     var g=it.go,clickable=!!(g&&canGo(g)),isData=it.k==="daten";
     return React.createElement("div",{key:it.k,"data-brief-item":it.k,"data-import-ask":isData?"1":undefined,
       role:clickable?"button":undefined,tabIndex:clickable?0:undefined,
@@ -13685,7 +13686,7 @@ function Planungstool(){
         Card({tag:"M0",title:"Heute · "+brWdDay(todayStr),wide:true},
           briefing&&briefing.board?React.createElement(HeuteBoard,{b:briefing,onGo:briefGo}):null,
           React.createElement(BriefingList,{b:briefing,onGo:briefGo,canGo:briefCanGo,
-            ohne:briefing&&briefing.board?{ueber:1,start:1,faellig:1}:null,ohneStats:!!(briefing&&briefing.board)}),
+            ohne:briefing&&briefing.board?{ueber:1,start:1,faellig:1,bc:1}:{bc:1},ohneStats:!!(briefing&&briefing.board)}),  /* v3.21.1: BC-Status nur in M6 */
           // v2.99.0: Aenderungen des letzten Imports, bis zum naechsten Import
           impView&&React.createElement("div",{"data-imp-tile":"1",style:{marginTop:12,paddingTop:10,borderTop:"1px solid "+A.border}},
             React.createElement("div",{style:{fontSize:"var(--fs-sm)",fontWeight:800,color:A.text,marginBottom:6}},
