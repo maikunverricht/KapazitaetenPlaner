@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.28.0";
+var APP_VERSION="3.29.0";
+// v3.29.0: Sprints -- Restaufwand: Last rechnet offene WIs hoechstens mit aktuellem Rest, Hinweis + "an Rest anpassen"; Gruppen zuklappbar, Einzelteams nur beim Ausklappen, dort aus der Gruppe nehmen (Maik).
 // v3.28.0: Sprintplanung -- Workitem-Liste je KW nach Bearbeiter gruppiert und zuklappbar (Maik).
 // v3.27.0: Separate Sprints je Gruppe (Maik) -- eigener Takt (Start, Laenge, Enden, Inhalte, Sync) in cfg.takte; beim Anlegen kopiert vom gemeinsamen Takt; Meldungen ueber alle Takte.
 // v3.26.0: Sprints -- gewaehlte Teams als Gruppe unter eigenem Namen speichern (Maik); ein Klick waehlt die Gruppe, Titel zeigt ihren Namen.
@@ -8409,9 +8410,11 @@ function Planungstool(){
         /* erledigte Workitems (nicht mehr in pkgById) zaehlen beim Team, dem sie zugeordnet waren -- unbekannt: beim gewaehlten Team */
         var ids=allIds.filter(function(id){var p=pkgById[id];return p?!!drin[p.employee]:team===sprCfg.team;});
         var offen=ids.filter(function(id){return !!pkgById[id];});
-        var geplant=ids.reduce(function(s,id){return s+(Number(sprCfg.zu[id][akt.nr])||0);},0);
+        // v3.29.0: offene Workitems hoechstens mit ihrem aktuellen Rest
+        var effL=function(id){var h=Number(sprCfg.zu[id][akt.nr])||0,p=pkgById[id];return p?Math.min(h,sprRest(p)):h;};
+        var geplant=ids.reduce(function(s,id){return s+effL(id);},0);
         var kap=emps.reduce(function(s,e){return s+sprKap(e,absenceMap,akt.start,akt.ende);},0);
-        var ueber=emps.filter(function(e){var h=offen.filter(function(id){return pkgById[id].employee===e.id;}).reduce(function(s,id){return s+(Number(sprCfg.zu[id][akt.nr])||0);},0);
+        var ueber=emps.filter(function(e){var h=offen.filter(function(id){return pkgById[id].employee===e.id;}).reduce(function(s,id){return s+effL(id);},0);
           return h>sprKap(e,absenceMap,akt.start,akt.ende);}).length;
         var melden=sprMeld.filter(function(m){return !m.gruppe&&m.sprint.nr===akt.nr&&!!drin[m.p.employee];}).length;
         return {team:team,n:ids.length,offen:offen.length,erledigt:ids.length-offen.length,geplant:r1(geplant),kap:r1(kap),ueber:ueber,melden:melden};}
@@ -10129,6 +10132,16 @@ function Planungstool(){
     var gruppeAkt=sprGruppeAkt(cfg,teams,wahlT);
     var mehrT=wahlT.length>1,team=gruppeAkt||wahlT.join(" + ");
     var s_gn=useState(null);var gruppeNeu=s_gn[0],setGruppeNeu=s_gn[1];
+    var s_ga=useState({});var grpAuf=s_ga[0],setGrpAuf=s_ga[1];
+    // v3.29.0: Team aus einer Gruppe nehmen -- seine Workitems verlassen den Takt der Gruppe;
+    // bleibt nur ein Team, wird die Gruppe aufgeloest.
+    function teamAusGruppe(g,t){var ids={};alleEmps.forEach(function(e){if(sprTeamVon(sprCfg,e)===t)ids[e.id]=1;});
+      setSprCfg(function(c){var n=JSON.parse(JSON.stringify(c));if(!n.gruppen||!n.gruppen[g])return c;
+        n.gruppen[g]=n.gruppen[g].filter(function(x){return x!==t;});
+        var tk=n.takte&&n.takte[g];if(tk&&tk.zu)Object.keys(tk.zu).forEach(function(id){var p=pkgById[id];if(p&&ids[p.employee])delete tk.zu[id];});
+        if(n.gruppen[g].length<2){delete n.gruppen[g];if(n.takte)delete n.takte[g];}
+        if(Array.isArray(n.teams)){n.teams=n.teams.filter(function(x){return x!==t;});if(!n.teams.length)n.teams=[t];n.team=n.teams[0];}
+        return n;});}
     function gruppeWaehlen(g){aendern(function(n){var l=teams.filter(function(t){return (n.gruppen[g]||[]).indexOf(t)>=0;});if(l.length){n.teams=l;n.team=l[0];}});}
     function gruppeSpeichern(name){name=String(name||"").trim();if(!name)return;
       var ts=wahlT.slice(),ids={};alleEmps.forEach(function(e){if(ts.indexOf(sprTeamVon(cfg,e))>=0)ids[e.id]=1;});
@@ -10181,18 +10194,30 @@ function Planungstool(){
       aktI>0?React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},React.createElement("input",{type:"checkbox",checked:vor>0,onChange:function(e){setVor(e.target.checked?1:0);}}),"vorigen Sprint zeigen"):null,
       React.createElement("div",{role:"group","aria-label":"Teams","data-spr-team":"1",style:Object.assign({},kl,{display:"inline-flex",gap:4,alignItems:"center",flexWrap:"wrap"})},
         React.createElement("span",{style:{marginRight:2}},"Teams"),
-        Object.keys(gruppen).sort(function(a,b){return a.localeCompare(b,"de");}).map(function(g){var an=g===gruppeAkt;
-          return React.createElement("span",{key:"g:"+g,style:{display:"inline-flex",alignItems:"center"}},
-            React.createElement("button",{type:"button","data-spr-gruppe":g,"aria-pressed":an?"true":"false",title:(gruppen[g]||[]).join(" + "),
+        // v3.29.0 (Maik): Gruppen zeigen ihre Teams erst beim Ausklappen; dort laesst sich ein
+        // Team wieder aus der Gruppe nehmen. Teams ohne Gruppe stehen einzeln daneben.
+        Object.keys(gruppen).sort(function(a,b){return a.localeCompare(b,"de");}).map(function(g){var an=g===gruppeAkt,offen=!!grpAuf[g];
+          var mit=(gruppen[g]||[]).filter(function(t){return teams.indexOf(t)>=0;});
+          var rund=function(l,r){return {borderRadius:(l?"999px":"0")+" "+(r?"999px":"0")+" "+(r?"999px":"0")+" "+(l?"999px":"0")};};
+          var farbe={borderColor:an?A.violet:A.border,background:an?A.violetLight:A.surface,color:an?A.violet:A.textMid};
+          return React.createElement("span",{key:"g:"+g,"data-spr-gruppe-box":g,style:{display:"inline-flex",alignItems:"center",flexWrap:"wrap",gap:0}},
+            React.createElement("button",{type:"button","data-spr-gruppe-auf":g,"aria-expanded":offen?"true":"false","aria-label":"Teams der Gruppe "+g+(offen?" zuklappen":" zeigen"),
+              onClick:function(){setGrpAuf(function(o){var n=Object.assign({},o);if(n[g])delete n[g];else n[g]=1;return n;});},
+              style:Object.assign({},ein,farbe,rund(true,false),{cursor:"pointer",padding:"3px 6px",borderRight:"none"})},offen?"\u25be":"\u25b8"),
+            React.createElement("button",{type:"button","data-spr-gruppe":g,"aria-pressed":an?"true":"false",title:mit.join(" + "),
               onClick:function(){gruppeWaehlen(g);},
-              style:Object.assign({},ein,{cursor:"pointer",fontWeight:700,borderColor:an?A.violet:A.border,background:an?A.violetLight:A.surface,color:an?A.violet:A.textMid,borderRadius:"999px 0 0 999px",padding:"3px 10px"})},"\u25a3 "+g),
-            React.createElement("button",{type:"button","data-spr-gruppe-weg":g,"aria-label":"Gruppe "+g+" l\u00f6schen",title:"Gruppe l\u00f6schen (Teams bleiben)",
+              style:Object.assign({},ein,farbe,rund(false,!offen),{cursor:"pointer",fontWeight:700,padding:"3px 10px"},offen?{borderRight:"none"}:{})},"\u25a3 "+g+(offen?"":" \u00b7 "+mit.length)),
+            offen?mit.map(function(t,i){var letzt=i===mit.length-1;
+              return React.createElement("span",{key:t,"data-spr-gruppe-team":g+"|"+t,style:Object.assign({},ein,farbe,rund(false,false),{display:"inline-flex",gap:4,alignItems:"center",padding:"3px 8px",fontWeight:500,borderRight:"none"})},t,
+                React.createElement("button",{type:"button","data-spr-gruppe-raus":g+"|"+t,"aria-label":t+" aus Gruppe "+g+" nehmen",title:"aus der Gruppe nehmen",
+                  onClick:function(){teamAusGruppe(g,t);},style:{border:"none",background:"none",color:A.textLight,cursor:"pointer",padding:0,font:"inherit",minHeight:20}},"\u00d7"));}):null,
+            offen?React.createElement("button",{type:"button","data-spr-gruppe-weg":g,"aria-label":"Gruppe "+g+" l\u00f6schen",title:"Gruppe l\u00f6schen (Teams bleiben)",
               onClick:function(){if(confirm("Gruppe \u201e"+g+"\u201c mit ihren eigenen Sprints l\u00f6schen? Die Teams bleiben und planen wieder im gemeinsamen Takt."))gruppeLoeschen(g);},
-              style:Object.assign({},ein,{cursor:"pointer",borderLeft:"none",borderColor:an?A.violet:A.border,borderRadius:"0 999px 999px 0",padding:"3px 7px",color:A.textLight})},"\u00d7"));}),
-        teams.map(function(t){var an=wahlT.indexOf(t)>=0;
+              style:Object.assign({},ein,farbe,rund(false,true),{cursor:"pointer",padding:"3px 8px",color:A.textLight})},"Gruppe l\u00f6schen"):null);}),
+        teams.filter(function(t){return !Object.keys(gruppen).some(function(g){return (gruppen[g]||[]).indexOf(t)>=0;});}).map(function(t){var an=wahlT.indexOf(t)>=0;
           return React.createElement("button",{key:t,type:"button","data-spr-team-wahl":t,"aria-pressed":an?"true":"false",
             title:an?(wahlT.length>1?"Team abw\u00e4hlen":"mindestens ein Team bleibt gew\u00e4hlt"):"Team dazunehmen",
-            onClick:function(){teamUmschalten(t);},
+            onClick:function(){if(gruppeAkt)aendern(function(n){n.teams=[t];n.team=t;});else teamUmschalten(t);},
             style:Object.assign({},ein,{cursor:"pointer",fontWeight:an?700:500,borderColor:an?A.mint:A.border,background:an?A.mintLight:A.surface,color:an?A.mintInk:A.textMid,borderRadius:999,padding:"3px 10px"})},(an?"\u2713 ":"")+t);}),
         mehrT&&!gruppeAkt?(gruppeNeu===null
           ?React.createElement("button",{type:"button","data-spr-gruppe-neu":"1",onClick:function(){setGruppeNeu("");},style:Object.assign({},ein,{cursor:"pointer",borderStyle:"dashed",borderRadius:999,padding:"3px 10px"})},"Als Gruppe speichern\u2026")
@@ -10273,13 +10298,30 @@ function Planungstool(){
 }
 
     // ── Sprints ──
+    // v3.29.0 (Maik): Restaufwand in den Sprints. Fuer offene Workitems zaehlt im
+    // laufenden und in kuenftigen Sprints hoechstens der aktuelle Rest (Rem_Eff, sonst
+    // Aufwand), frueheste Sprints zuerst. Weichen eingeplante Stunden und Rest ab,
+    // zeigt die Zeile einen Hinweis mit "an Rest anpassen". Vergangene Sprints bleiben.
+    var sprEnde={};L.forEach(function(x){sprEnde[x.nr]=x.ende;});
+    var effH={},restInfo={};
+    Object.keys(zu).forEach(function(id){var p=pkgById[id];if(!p)return;
+      var nrs=Object.keys(zu[id]).filter(function(nr){return (sprEnde[nr]||"9999")>=heute;}).sort(function(a,b){return a-b;});if(!nrs.length)return;
+      var rest=sprRest(p),r=rest,summe=0;
+      nrs.forEach(function(nr){var h=Number(zu[id][nr])||0;summe+=h;var e=Math.min(h,Math.max(0,r));effH[id+"@"+nr]=e;r-=e;});
+      if(Math.abs(summe-rest)>=0.5)restInfo[id]={rest:rest,summe:summe,nrs:nrs};});
+    function effVon(id,nr){var k=id+"@"+nr;return effH[k]!=null?effH[k]:(pkgById[id]?Number(zu[id][nr])||0:0);}
+    function anRestAnpassen(id){var I=restInfo[id];if(!I)return;
+      aendern(function(n){var r=I.rest;I.nrs.forEach(function(nr,i){if(!n.zu[id]||n.zu[id][nr]==null)return;
+        var h=Number(n.zu[id][nr])||0,neu=i===I.nrs.length-1?Math.max(0,r):Math.min(h,Math.max(0,r));
+        neu=Math.round(neu*2)/2;r-=neu;if(neu>0)n.zu[id][nr]=neu;else delete n.zu[id][nr];});
+        if(n.zu[id]&&!Object.keys(n.zu[id]).length)delete n.zu[id];});}
     var karten=React.createElement("div",{style:{flex:"2 1 520px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12,alignContent:"start"}},
       sichtbar.map(function(x){
         var ids=Object.keys(zu).filter(function(id){if(zu[id][x.nr]==null)return false;var p=pkgById[id];return p?!!imTeam[p.employee]:true;});
         var emps=teamEmps;
         var kapJe={},lastJe={};emps.forEach(function(e){kapJe[e.id]=sprKap(e,absenceMap,x.start,x.ende);lastJe[e.id]=0;});
-        ids.forEach(function(id){var p=pkgById[id];if(p&&lastJe[p.employee]!=null)lastJe[p.employee]+=Number(zu[id][x.nr])||0;});
-        var kap=emps.reduce(function(s,e){return s+kapJe[e.id];},0),last=ids.reduce(function(s,id){return s+(pkgById[id]?Number(zu[id][x.nr])||0:0);},0);
+        ids.forEach(function(id){var p=pkgById[id];if(p&&lastJe[p.employee]!=null)lastJe[p.employee]+=effVon(id,x.nr);});
+        var kap=emps.reduce(function(s,e){return s+kapJe[e.id];},0),last=ids.reduce(function(s,id){return s+effVon(id,x.nr);},0);
         var aktiv=x.start<=heute&&heute<=x.ende,vorbei=x.ende<heute,quote=kap?last/kap:0;
         return React.createElement("div",{key:x.nr,"data-spr-sprint":x.nr,
           onDragOver:function(e){e.preventDefault();},onDrop:function(e){e.preventDefault();var t=e.dataTransfer.getData("text/plain")||"";if(t.indexOf("spr:")===0)einplanen(t.slice(4),x.nr);},
@@ -10303,12 +10345,17 @@ function Planungstool(){
           (function(){
             // v3.13.0: je Bearbeiter
             function wiZeile(id){var p=pkgById[id];
-              return React.createElement("div",{key:id,"data-spr-im":id,onClick:function(e){e.stopPropagation();},style:{display:"flex",gap:6,alignItems:"center",fontSize:"var(--fs-xs)",color:p?A.text:A.textLight,paddingLeft:8}},
+              return React.createElement("div",{key:id,"data-spr-im":id,onClick:function(e){e.stopPropagation();},style:{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",fontSize:"var(--fs-xs)",color:p?A.text:A.textLight,paddingLeft:8}},
                 React.createElement("span",{style:{flex:1,minWidth:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},title:(p?id+" \u00b7 "+p.title:"nicht mehr offen")},(p?"":"\u2713 ")+(p?p.title||id:id)),
                 React.createElement("input",{type:"number",min:0,step:0.5,value:zu[id][x.nr],"data-spr-h":id+"@"+x.nr,title:"Stunden in diesem Sprint",
                   onChange:function(e){var v=Math.max(0,Number(e.target.value)||0);aendern(function(n){n.zu[id][x.nr]=v;});},style:Object.assign({},ein,{width:52})}),
                 React.createElement("span",{style:kl},"h"),
-                React.createElement("button",{type:"button","data-spr-weg":id+"@"+x.nr,title:"aus dem Sprint nehmen",onClick:function(e){e.stopPropagation();entfernen(id,x.nr);},style:Object.assign({},knopf,{padding:"0 6px"})},"\u2715"));}
+                React.createElement("button",{type:"button","data-spr-weg":id+"@"+x.nr,title:"aus dem Sprint nehmen",onClick:function(e){e.stopPropagation();entfernen(id,x.nr);},style:Object.assign({},knopf,{padding:"0 6px"})},"\u2715"),
+                (function(){var I=restInfo[id];if(!I||I.nrs[0]!==String(x.nr))return null;
+                  return React.createElement("div",{"data-spr-rest":id,style:{flexBasis:"100%",display:"flex",gap:6,alignItems:"center",fontSize:"var(--fs-2xs)",color:I.summe>I.rest?A.amberInk:A.textMid,paddingLeft:2}},
+                    "Rest jetzt "+nh(I.rest)+" h \u00b7 eingeplant "+nh(I.summe)+" h"+(I.nrs.length>1?" (S"+I.nrs.join("/S")+")":""),
+                    React.createElement("button",{type:"button","data-spr-rest-anpassen":id,onClick:function(e){e.stopPropagation();anRestAnpassen(id);},
+                      style:Object.assign({},knopf,{padding:"0 6px",fontSize:"var(--fs-2xs)"})},"an Rest anpassen"));})());}
             var proMa={},ohne=[];ids.forEach(function(id){var p=pkgById[id];if(p&&lastJe[p.employee]!=null)(proMa[p.employee]=proMa[p.employee]||[]).push(id);else ohne.push(id);});
             return React.createElement("div",{style:{marginTop:6,display:"flex",flexDirection:"column",gap:6}},
               emps.filter(function(e){return proMa[e.id];}).map(function(e){var ue=lastJe[e.id]>kapJe[e.id];
