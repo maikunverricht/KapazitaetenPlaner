@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.22.0";
+var APP_VERSION="3.22.1";
+// v3.22.1: Dashboard M0 -- Spalte/Zeile "Faellig bis" entfaellt (Maik); in der Start-Uebersicht bleibt sie.
 // v3.22.0: Dashboard-Kachel M5 "Ich warte auf" (Maik) -- offene Vorgaenger je eigenem WI mit Bearbeiter (immer mit Namen, Ausnahme ACC-08) und Prognose; die Warte-Zeilen unter "Heute" entfallen.
 // v3.21.1: Dashboard -- BC-Status nicht mehr unter "Heute" (M0), nur noch in M6 "Meine Business Cases".
 // v3.21.0: Testfaelle links im V (Maik): SWE.1 ist erst gruen, wenn jede L2/L3/L4 des Auftrags im TestcaseManager einen Testfall ihrer Ebene hat (spezifiziert genuegt); Anzeige "Testfaelle x/y" am Schritt.
@@ -6514,7 +6515,7 @@ function HeuteBoard(p){
   var nh=function(h){return String(Math.round(h*10)/10).replace(".",",")+"\u00a0h";};
   var FARBE={red:[A.coral,A.coralLight,A.coralInk],amber:[A.amber,A.amberLight,A.amberInk],info:[A.mint,A.mintLight,A.mintInk]};
   return React.createElement("div",{"data-heute-board":"1",style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:10,marginBottom:10,alignItems:"start"}},
-    b.board.map(function(sp){
+    b.board.filter(function(sp){return !(p.ohne&&p.ohne[sp.k]);}).map(function(sp){  /* v3.22.1: p.ohne blendet Spalten aus */
       var f=FARBE[sp.n?sp.sev:"info"]||FARBE.info,leer=!sp.n;
       return React.createElement("div",{key:sp.k,"data-heute-spalte":sp.k,style:{border:"1px solid "+(leer?A.border:f[0]),borderRadius:"var(--r-lg)",background:A.surface,overflow:"hidden",display:"flex",flexDirection:"column",minWidth:0}},
         React.createElement("div",{style:{display:"flex",alignItems:"baseline",gap:8,padding:"8px 12px",background:leer?A.bg:f[1]}},
@@ -13686,9 +13687,9 @@ function Planungstool(){
 
         // v2.98.0: Briefing -- dieselbe Liste wie das Fenster nach der Anmeldung.
         Card({tag:"M0",title:"Heute · "+brWdDay(todayStr),wide:true},
-          briefing&&briefing.board?React.createElement(HeuteBoard,{b:briefing,onGo:briefGo}):null,
+          briefing&&briefing.board?React.createElement(HeuteBoard,{b:briefing,onGo:briefGo,ohne:{faellig:1}}):null,
           React.createElement(BriefingList,{b:briefing,onGo:briefGo,canGo:briefCanGo,
-            ohne:briefing&&briefing.board?{ueber:1,start:1,faellig:1,bc:1,block:1}:{bc:1,block:1},ohneStats:!!(briefing&&briefing.board)}),  /* v3.21.1: BC-Status nur in M6 */
+            ohne:briefing&&briefing.board?{ueber:1,start:1,faellig:1,bc:1,block:1}:{bc:1,block:1,faellig:1},ohneStats:!!(briefing&&briefing.board)}),  /* v3.21.1: BC-Status nur in M6 */
           // v2.99.0: Aenderungen des letzten Imports, bis zum naechsten Import
           impView&&React.createElement("div",{"data-imp-tile":"1",style:{marginTop:12,paddingTop:10,borderTop:"1px solid "+A.border}},
             React.createElement("div",{style:{fontSize:"var(--fs-sm)",fontWeight:800,color:A.text,marginBottom:6}},
