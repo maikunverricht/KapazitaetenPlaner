@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.23.0";
+var APP_VERSION="3.24.0";
+// v3.24.0: Dashboard passt auf eine Seite (Maik) -- Raster in der freien Hoehe, M0 zwei Zeilen, Inhalt rollt in der Kachel; schmal (<700px) oder zu eng rollt die Seite wie bisher.
 // v3.23.0: Anmeldung einmal am Tag (Maik) -- der Name aus dem Startbildschirm gilt bis Mitternacht; "Name wechseln" fragt neu.
 // v3.22.2: Dashboard M0 -- Zeile "Startet bis" entfaellt (Maik); in der Start-Uebersicht bleibt sie.
 // v3.22.1: Dashboard M0 -- Spalte/Zeile "Faellig bis" entfaellt (Maik); in der Start-Uebersicht bleibt sie.
@@ -13482,6 +13483,45 @@ function Planungstool(){
   // Zwei Sichten aus einer Datenbasis: findet der eingegebene Name einen
   // Mitarbeiter, zeigt das Dashboard dessen Lage; sonst die Planersicht
   // ueber das ganze Team.
+  // v3.24.0 (Maik): "Dashboard sollte immer auf eine Seite passen". Das Raster
+  // bekommt die freie Hoehe des Arbeitsbereichs; die Zeilen teilen sie sich,
+  // M0 (breit) nimmt zwei Zeilen. Was in einer Kachel nicht Platz hat, rollt in
+  // der Kachel. Unter 700px Breite bzw. wenn eine Zeile kleiner als 130px
+  // wuerde, rollt die Seite wie bisher.
+  function dashFit(el){
+    if(!el||el._dashFit)return;el._dashFit=true;
+    var GAP=12,MIN=250,ENG=200,MINROW=105,rest=16,spalten0=el.style.gridTemplateColumns;
+    function lauf(nochmal){
+      if(!el.isConnected)return;
+      var sc=document.getElementById("main-scroll");
+      var kids=[].filter.call(el.children,function(c){return c.nodeType===1;});
+      function aus(){el.style.height="";el.style.gridAutoRows="";el.style.gridTemplateColumns=spalten0;el.removeAttribute("data-dash-fit");
+        kids.forEach(function(c){c.style.gridRow="";});}
+      if(!sc||window.innerWidth<700||!kids.length){aus();return;}
+      var c1=Math.max(1,Math.floor((el.clientWidth+GAP)/(MIN+GAP))),c2=Math.max(c1,Math.floor((el.clientWidth+GAP)/(ENG+GAP)));
+      var top=el.getBoundingClientRect().top-sc.getBoundingClientRect().top+sc.scrollTop;
+      var frei=sc.clientHeight-top-rest;
+      var breit=kids.filter(function(c){return c.hasAttribute("data-dash-wide");}).length,schmal=kids.length-breit;
+      /* M0 moeglichst zwei Zeilen hoch; dafuer lieber eine Spalte mehr (bis 200px je
+         Kachel). Reicht auch das nicht, M0 eine Zeile. */
+      var wahl=null;
+      [2,1].some(function(sp){for(var cols=c1;cols<=c2;cols++){
+        var rows=breit*sp+Math.ceil(schmal/cols),h=Math.floor((frei-GAP*(rows-1))/rows);
+        if(h>=MINROW){wahl={sp:sp,h:h,cols:cols};return true;}}return false;});
+      if(!wahl){aus();return;}
+      el.style.gridTemplateColumns="repeat("+wahl.cols+",minmax(0,1fr))";
+      el.style.height=frei+"px";el.style.gridAutoRows=wahl.h+"px";el.setAttribute("data-dash-fit","1");
+      kids.forEach(function(c){c.style.gridRow=c.hasAttribute("data-dash-wide")?"span "+wahl.sp:"";});
+      /* Abstand unter dem Raster mitnehmen: rollt es doch, einmal nachziehen */
+      var ueber=sc.scrollHeight-sc.clientHeight;
+      if(ueber>0&&!nochmal){rest+=ueber;lauf(true);}
+    }
+    var t=null;function bald(){clearTimeout(t);t=setTimeout(lauf,30);}
+    try{var ro=new ResizeObserver(bald);ro.observe(el);var sc0=document.getElementById("main-scroll");if(sc0)ro.observe(sc0);}catch(e){}
+    try{new MutationObserver(bald).observe(el,{childList:true});}catch(e){}
+    window.addEventListener("resize",bald);
+    lauf();
+  }
   function DashboardView(){
     var todayStr=dateStr(new Date());
     var s_cfg=useState(false); var showCardCfg=s_cfg[0],setShowCardCfg=s_cfg[1]; // v2.53.0
@@ -13557,7 +13597,7 @@ function Planungstool(){
 
     // ── Bausteine ────────────────────────────────────────────────────
     var CARD={background:A.surface,border:"1px solid "+A.border,borderRadius:"var(--r-xl)",
-      padding:"14px 15px",display:"flex",flexDirection:"column",minWidth:0};
+      padding:"14px 15px",display:"flex",flexDirection:"column",minWidth:0,minHeight:0,overflow:"hidden"};
     function Card(p){
       // Kinder kommen wie bei createElement als weitere Argumente
       var kids=Array.prototype.slice.call(arguments,1);
@@ -13570,15 +13610,17 @@ function Planungstool(){
       // verlangt Keys, und ohne sie ordnet React beim Umsortieren Zustaende
       // der falschen Kachel zu.
       return React.createElement.apply(null,[
-        "div",{key:p.tag,className:"glass",style:Object.assign({},CARD,
+        "div",{key:p.tag,className:"glass","data-dash-wide":p.wide?"1":undefined,style:Object.assign({},CARD,
           p.wide?{gridColumn:"1/-1"}:{},ord>=0?{order:ord}:{})},
         React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:11}},
           React.createElement("span",{style:{fontFamily:"var(--font-mono)",fontSize:"var(--fs-2xs)",fontWeight:700,
             color:A.textLight,border:"1px solid "+A.border,borderRadius:"var(--r-sm)",padding:"1px 5px"}},p.tag),
           React.createElement("span",{style:{fontSize:"var(--fs-md)",fontWeight:700,flex:1,minWidth:0}},p.title),
           p.badge||null
-        )
-      ].concat(kids));
+        ),
+        // v3.24.0: Inhalt rollt in der Kachel, wenn das Raster die Hoehe vorgibt
+        React.createElement.apply(null,["div",{className:"dash-body",style:{flex:1,minHeight:0,overflowY:"auto",overflowX:"hidden"}}].concat(kids))
+      ]);
     }
     function Row(p){
       return React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,padding:"5px 0",
@@ -13692,7 +13734,7 @@ function Planungstool(){
         if(Object.keys(inBcs).length>1)sharedFc++;
       });
 
-      return React.createElement("div",{className:"dash-grid",style:GRID},
+      return React.createElement("div",{className:"dash-grid",ref:dashFit,style:GRID},
 
         // v2.98.0: Briefing -- dieselbe Liste wie das Fenster nach der Anmeldung.
         Card({tag:"M0",title:"Heute · "+brWdDay(todayStr),wide:true},
@@ -13975,7 +14017,7 @@ function Planungstool(){
         return p.lcs!=="closed"&&countsForEffort(p)&&remOf(p)===0;}).length;
       var noStart=allPkgs.filter(function(p){return !p.start;}).length;
 
-      return React.createElement("div",{className:"dash-grid",style:GRID},
+      return React.createElement("div",{className:"dash-grid",ref:dashFit,style:GRID},
 
         Card({tag:"P1",title:"Team-Auslastung \u00b7 10 Wochen",wide:true},
           vis.length?React.createElement("div",null,
