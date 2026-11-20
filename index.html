@@ -2556,7 +2556,8 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.27.0";
+var APP_VERSION="3.28.0";
+// v3.28.0: Sprintplanung -- Workitem-Liste je KW nach Bearbeiter gruppiert und zuklappbar (Maik).
 // v3.27.0: Separate Sprints je Gruppe (Maik) -- eigener Takt (Start, Laenge, Enden, Inhalte, Sync) in cfg.takte; beim Anlegen kopiert vom gemeinsamen Takt; Meldungen ueber alle Takte.
 // v3.26.0: Sprints -- gewaehlte Teams als Gruppe unter eigenem Namen speichern (Maik); ein Klick waehlt die Gruppe, Titel zeigt ihren Namen.
 // v3.25.0: Sprints fuer mehrere Teams parallel planen (Maik) -- Teams oben an-/abwaehlen, Liste und Sprints zeigen alle gewaehlten, Last je Team im Sprint.
@@ -10240,7 +10241,19 @@ function Planungstool(){
             React.createElement("b",{style:{fontSize:"var(--fs-xs)",color:k==="0"?A.coralInk:A.text}},g.lab+(dieseKw?" \u00b7 diese Woche":"")),
             g.von?React.createElement("span",{style:kl},tg(g.von)+"\u2013"+tg(g.bis)+(spr?" \u00b7 "+spr:"")):null,
             React.createElement("span",{style:Object.assign({},kl,{marginLeft:"auto",whiteSpace:"nowrap"})},g.ps.length+" WI \u00b7 "+nh(g.h)+" h"))]
-          .concat(g.ps.map(function(p){
+          .concat((function(){
+            // v3.28.0 (Maik): innerhalb der KW nach Bearbeiter gruppiert, zuklappbar
+            var M={},mo=[];g.ps.forEach(function(p){var m=p.employee||"";if(!M[m]){M[m]={m:m,ps:[],h:0};mo.push(m);}M[m].ps.push(p);M[m].h+=sprRest(p);});
+            mo.sort(function(a,b){return (empName(a)||"~").localeCompare(empName(b)||"~","de");});
+            return mo.map(function(m){var B=M[m],kk="kwma:"+k+":"+m,auf=!zuKl[kk];
+              var kopfMa=React.createElement("button",{key:"ma"+k+m,type:"button","data-spr-kw-ma":empName(m)||"ohne",onClick:function(){klapp(kk);},"aria-expanded":auf?"true":"false",
+                style:{display:"flex",gap:6,alignItems:"baseline",width:"100%",padding:"4px 12px 4px 16px",border:"none",borderBottom:"1px solid "+A.border,background:"transparent",cursor:"pointer",textAlign:"left",color:A.text,fontSize:"var(--fs-xs)"}},
+                pfeil(kk),React.createElement("b",null,empName(m)||"ohne Bearbeiter"),
+                mehrT?React.createElement("span",{style:kl},sprTeamVon(cfg,employees.find(function(x){return x.id===m;}))):null,
+                React.createElement("span",{style:Object.assign({},kl,{marginLeft:"auto",whiteSpace:"nowrap"})},B.ps.length+" WI \u00b7 "+nh(B.h)+" h"));
+              return [kopfMa].concat(auf?B.ps.map(zeileWi):[]);});
+          })().reduce(function(a,b){return a.concat(b);},[]));});})());
+    function zeileWi(p){
         var r=sprRest(p),v=verplant(p.id),m=marke(p),gew=sprWahl===p.id,sp=Object.keys(zu[p.id]||{}).sort(function(a,b){return a-b;});
         return React.createElement("div",{key:p.id,"data-spr-wi":p.id,draggable:true,
           onDragStart:function(e){e.dataTransfer.effectAllowed="copy";e.dataTransfer.setData("text/plain","spr:"+p.id);},
@@ -10252,12 +10265,13 @@ function Planungstool(){
               m[0]?React.createElement("span",{style:{fontSize:"var(--fs-2xs)",fontWeight:700,color:m[1]}},m[0]):null,
               meldIds[p.id]?React.createElement("span",{title:meldIds[p.id],style:{fontSize:"var(--fs-2xs)",color:A.amber}},"\u26a0 umplanen"):null),
             React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},p.title||p.id),
-            React.createElement("div",{style:kl},(mehrT?"["+sprTeamVon(cfg,employees.find(function(x){return x.id===p.employee;}))+"] ":"")+empName(p.employee)+(p.cn?" \u00b7 "+p.cn:p.rn?" \u00b7 "+p.rn:"")+(p.end?" \u00b7 Plan bis "+tg(p.end):""))),
+            React.createElement("div",{style:kl},(p.cn||p.rn||"")+(p.end?((p.cn||p.rn)?" \u00b7 ":"")+"Plan bis "+tg(p.end):""))),
           React.createElement("div",{style:{textAlign:"right"}},
             React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.text}},nh(r)+" h"),
             React.createElement("div",{style:Object.assign({},kl,{color:v>=r&&r>0?A.green:v>0?A.amber:A.textLight})},v?(v>=r?"verplant":nh(r-v)+" h offen"):"nicht im Sprint"),
             sp.length?React.createElement("div",{style:kl},sp.map(function(n){return "S"+n;}).join(" \u00b7 ")):null));
-      }));});})());
+}
+
     // ── Sprints ──
     var karten=React.createElement("div",{style:{flex:"2 1 520px",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12,alignContent:"start"}},
       sichtbar.map(function(x){
