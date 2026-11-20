@@ -2556,7 +2556,9 @@ function dayNum(d){
 function safeNum(v,fallback){return(typeof v==="number"&&isFinite(v))?v:fallback;}
 // v2.55.0: Eine Quelle fuer die Versionsnummer. Vorher stand sie in der
 // Seitenleiste fest verdrahtet und blieb 13 Versionen lang auf v2.41.0 stehen.
-var APP_VERSION="3.32.0";
+var APP_VERSION="3.33.0";
+// v3.33.0: Sprints -- in Arbeit ohne Rem_Eff zaehlt 50 % des Aufwands als Rest; Rem_Eff="0" wird uebernommen (fiel vorher auf den Gesamtaufwand zurueck); Liste zeigt "Rest x h".
+// v3.33.0: Sprint planen -- Kopf (Reiter, Takt, Teams, Hinweis) bleibt beim Rollen stehen (Maik).
 // v3.32.0: Bericht (Maik) -- Kapazitaet mit Geplant/Quote/Ueberlast-Wochen aus der Planung, neu: Fortschritt je BC/FC, Sprint-Bilanz, V-Status je Issue, Datenqualitaet.
 // v3.31.0: Bericht ohne erfasste Zeiten (Maik) -- Ist/Quote, Abrechnung und Verlauf entfernt; Kapazitaet (Soll) und Termine bleiben.
 // v3.30.0: Sprintplanung -- mehrere Workitems auf einmal einplanen (Maik): Antippen sammelt, "alle waehlen" je Bearbeiterblock, Ziehen eines gewaehlten zieht alle, Sprint antippen plant alle ein.
@@ -3818,7 +3820,8 @@ function parseClearQuest(rows,opt){
     if(xml){
       // Suche Rem_Eff="X" (echte CQ-Daten) UND Tag_Rem_Eff="X" (älteres Format)
       var m=String(xml).match(/Rem_Eff="([^"]+)"/);
-      if(m&&m[1]){var v=parseFloat(m[1]);if(!isNaN(v)&&v>0)return v;}
+      // v3.33.0: Rem_Eff="0" ist ein gueltiger Rest (fertig, aber nicht geschlossen) -- vorher fiel er auf den Gesamtaufwand zurueck
+      if(m&&m[1]){var v=parseFloat(m[1]);if(!isNaN(v)&&v>=0)return v;}
       var m2=String(xml).match(/Tag_Rem_Eff="([^"]+)"/);
       if(m2&&m2[1]){var v2=parseFloat(m2[1]);if(!isNaN(v2))return v2;}
     }
@@ -4845,7 +4848,13 @@ function sprListe(cfg,bis){
   return out;}
 function sprKap(emp,absMap,von,bis){var am=(absMap&&absMap[emp.id])||{},h=0,d=new Date(von+"T00:00:00"),e=bis;
   while(dateStr(d)<=e){var iso=dateStr(d);if(!isWE(d)&&!am[iso])h+=dailyCapacity(emp);d.setDate(d.getDate()+1);}return h;}
-function sprRest(p){return p.remainingHours!=null?Number(p.remainingHours)||0:Number(p.hours)||0;}
+// v3.33.0 (Maik): "Workitems in Arbeit sollten schon 50 % Aufwand angenommen bekommen",
+// solange kein Rem_Eff gepflegt ist (_remEffH leer; aeltere Daten: Rest = Gesamtaufwand).
+function sprRestGepflegt(p){return p&&(p._remEffH!=null||(p.remainingHours!=null&&p._remEffH===undefined&&Number(p.remainingHours)!==Number(p.hours)));}
+function sprRest(p){if(!p)return 0;var h=Number(p.hours)||0;
+  if(p.lcs==="closed")return 0;
+  if(p.lcs==="started"&&!sprRestGepflegt(p))return Math.round(h*0.5*2)/2;
+  return p.remainingHours!=null?Number(p.remainingHours)||0:h;}
 /* Dringlichkeit: ueberfaellig > naechster Liefertermin (FC/BC) > in Arbeit > Plandatum */
 function sprDringlich(a,b,heute){
   var ua=a.end&&a.end<heute?0:1,ub=b.end&&b.end<heute?0:1;if(ua!==ub)return ua-ub;
@@ -10192,7 +10201,9 @@ function Planungstool(){
       [["planen","Sprint planen"],["sync","Sprint-Sync"]].map(function(t){var an=reiter===t[0];
         return React.createElement("button",{key:t[0],type:"button","data-spr-tab":t[0],onClick:function(){setReiter(t[0]);},
           style:{padding:"5px 12px",border:"none",background:an?A.mint:A.surface,color:an?A.onMint:A.text,fontWeight:700,fontSize:"var(--fs-xs)",cursor:"pointer"}},t[1]);}));
-    var kopf=React.createElement("div",{style:{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",marginBottom:12}},
+    // v3.33.0 (Maik): In "Sprint planen" bleibt der Kopf beim Rollen stehen
+    var kopf=React.createElement("div",{"data-spr-kopf":"1",style:Object.assign({display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",marginBottom:12},
+        reiter==="sync"?{}:{position:"sticky",top:-20,zIndex:6,margin:"-20px -20px 12px",padding:"20px 20px 10px",background:A.bg,borderBottom:"1px solid "+A.border,boxShadow:"0 6px 12px -10px rgb(var(--c-ink-rgb) / .25)"})},
       reiterLeiste,
       React.createElement("label",{style:Object.assign({},kl,{display:"inline-flex",gap:6,alignItems:"center"})},"Erster Sprint ab",
         React.createElement("input",{type:"date",value:cfg.start||"","data-spr-start":"1",onChange:function(e){var v=e.target.value;aendern(function(n){n.start=v;});},style:ein})),
@@ -10311,8 +10322,9 @@ function Planungstool(){
             React.createElement("div",{style:{fontSize:"var(--fs-xs)",color:A.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}},p.title||p.id),
             React.createElement("div",{style:kl},(p.cn||p.rn||"")+(p.end?((p.cn||p.rn)?" \u00b7 ":"")+"Plan bis "+tg(p.end):""))),
           React.createElement("div",{style:{textAlign:"right"}},
-            React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.text}},nh(r)+" h"),
-            React.createElement("div",{style:Object.assign({},kl,{color:v>=r&&r>0?A.green:v>0?A.amber:A.textLight})},v?(v>=r?"verplant":nh(r-v)+" h offen"):"nicht im Sprint"),
+            React.createElement("div",{style:{fontSize:"var(--fs-xs)",fontWeight:700,color:A.text},title:(p.lcs==="started"&&!sprRestGepflegt(p))?"in Arbeit ohne Rem_Eff: 50 % von "+nh(Number(p.hours)||0)+" h angenommen":sprRestGepflegt(p)?"Rest aus Rem_Eff":"Rest = Aufwand (kein Rem_Eff)"},
+              "Rest "+nh(r)+" h"+((p.lcs==="started"&&!sprRestGepflegt(p))?" \u00b7 50 %":"")),
+            React.createElement("div",{style:Object.assign({},kl,{color:v>=r&&r>0?A.green:v>0?A.amber:A.textLight})},v?(v>=r?"verplant":nh(r-v)+" h nicht eingeplant"):"nicht im Sprint"),
             sp.length?React.createElement("div",{style:kl},sp.map(function(n){return "S"+n;}).join(" \u00b7 ")):null));
 }
 
@@ -10391,7 +10403,8 @@ function Planungstool(){
       }));
     // v3.14.1: ohne eigenes overflow, sonst haftet die Ringkarte nicht (Scroller ist .main-scroll)
     if(reiter==="sync")return React.createElement("div",{style:{padding:20,flex:1,minHeight:0}},kopf,syncAnsicht());
-    return React.createElement("div",{style:{padding:20,overflow:"auto",flex:1,minHeight:0}},kopf,
+    // v3.33.0: ohne eigenes overflow, sonst haftet der Kopf nicht (Scroller ist #main-scroll)
+    return React.createElement("div",{style:{padding:20,flex:1,minHeight:0}},kopf,
       React.createElement("div",{style:{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-start"}},liste,karten));
     // ── v3.11.0: Sprint-Sync ──
     function syncAnsicht(){
@@ -10713,7 +10726,7 @@ function Planungstool(){
     // V-Status je Issue (aus der Lesekopie des V) und Datenqualitaet der offenen WIs
     var vRep=useMemo(function(){try{return (vlLesekopie(vlauf,issueIdxRaw,releases,employees,"").auftraege||[]).filter(function(a){return a.schritte&&Object.keys(a.schritte).length;});}catch(e){return [];}},[vlauf,issueIdxRaw,releases,employees]);
     var dq=useMemo(function(){var o=(allPkgs||[]).filter(function(p){return p&&p.lcs!=="closed";});
-      return {n:o.length,ohneRest:o.filter(function(p){return p.remainingHours==null;}),ohneMa:o.filter(function(p){return !p.employee;}),
+      return {n:o.length,ohneRest:o.filter(function(p){return !sprRestGepflegt(p);}),ohneMa:o.filter(function(p){return !p.employee;}),
         ohneTermin:o.filter(function(p){return !p.end;}),ohneAufwand:o.filter(function(p){return !(Number(p.hours)>0)&&!(Number(p.remainingHours)>0);})};},[allPkgs]);
     var tot=useMemo(function(){
       return perEmp.reduce(function(a,r){
